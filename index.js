@@ -1,5 +1,11 @@
 // https://pptr.dev/#?product=Puppeteer&version=v9.1.1&show=api-working-with-chrome-extensions
 
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 const puppeteer = require('puppeteer');
 const folderName = 'StreamRecorder/extension_1_3_3_0'; //'my-extension'
 
@@ -10,13 +16,14 @@ const folderName = 'StreamRecorder/extension_1_3_3_0'; //'my-extension'
     args: [
       `--disable-extensions-except=${pathToExtension}`,
       `--load-extension=${pathToExtension}`,
+      `--whitelisted-extension-id=iogidnfllpdhagebkblkgbfijkbkjdmm`
     ],
   });
   const targets = await browser.targets();
   const backgroundPageTarget = targets.find(
     (target) => target.type() === 'background_page'
   );
-  //const backgroundPage = await backgroundPageTarget.page();
+  const backgroundPage = await backgroundPageTarget.page();
   // Test the background page as you would any other page.
   //await browser.close();
   
@@ -49,11 +56,42 @@ const folderName = 'StreamRecorder/extension_1_3_3_0'; //'my-extension'
   //   });
 
 
+  /* // [doesn't work:] //
   // https://stackoverflow.com/questions/48089670/detect-and-test-chrome-extension-using-puppeteer :
   // Can we navigate to a chrome-extension page? YES!
 const page = await browser.newPage();
   await page.goto('chrome-extension://iogidnfllpdhagebkblkgbfijkbkjdmm/background.html');
   // click buttons, test UI elements, etc.
+  */
 
-  console.log(UNITS);
+  /* // https://pptr.dev/#?product=Puppeteer&version=v9.1.1&show=api-pageevaluatepagefunction-args
+  const bodyHandle = await page.$('body');
+  const html = await page.evaluate((body) => body.innerHTML, bodyHandle);
+  */
+  //console.log(WebExtensions.browserAction.onClicked);
+  ///await sleep(6000);
+  ///console.log(await backgroundPage.evaluate("WebExtensions.browserAction.onClicked"));
+
+
+  // Works!: https://github.com/puppeteer/puppeteer/issues/2486 : //
+  
+  // load a page from which to click browser action, make it the active tab
+  const someOtherPage = await browser.newPage()
+  await someOtherPage.goto('https://google.com')
+  await someOtherPage.bringToFront()
+  
+  // evaluate chrome object in context of background page:
+  const extBackgroundPage = backgroundPage;
+  await extBackgroundPage.evaluate(() => {
+    chrome.tabs.query({ active: true }, tabs => {
+      chrome.browserAction.onClicked.dispatch(tabs[0]);
+    })
+  })
+
+  // //
+
+
+
+  
+  //console.log(UNITS);
 })();
