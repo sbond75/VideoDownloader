@@ -120,20 +120,30 @@ var runKaltura = async function(page) {
 
   // Click each link
   await asyncForEach(result, async function(elementHandle) {
-    await elementHandle.click();
+    // https://pocketadmin.tech/en/puppeteer-open-link-in-new-tab/
+    const newPagePromise = new Promise(x => browser.once('targetcreated', target => x(target.page())));  // declare promise
+    await elementHandle.click({button : "middle"});       // click middle button, link open in a new tab
+    const page2 = await newPagePromise;                   // declare new tab, now you can work with it
+    await page2.bringToFront();                           // make the tab active
 
     // Grab the video after the page loads from the above click.
-    const sel = `iframe[class*="d2l-iframe"]`; // https://stackoverflow.com/questions/21222375/css-selector-for-attribute-names-based-on-a-wildcard : {"
+    const sel = `#kplayer_ifp`; // Grab the element (in this case, it should be an iframe) with this id.        //`iframe[class*="d2l-iframe"]`; // https://stackoverflow.com/questions/21222375/css-selector-for-attribute-names-based-on-a-wildcard : {"
     // E[foo*="bar"]
     // an E element whose "foo" attribute value contains the substring "bar"
     // "}
-    const frameHandle = await page.waitForSelector(sel);
+    const frameHandle = await page2.waitForSelector(sel);
     const frame = await frameHandle.contentFrame();
     const resultsSelector = 'a.icon-play';
-    await frame.waitForSelector(resultsSelector);
-    const res = await frame.$$(resultsSelector);
+    const res = await frame.waitForSelector(resultsSelector);
+    //const resArray = await frame.$$(resultsSelector);
     // Push play
-    res[0].click();
+    //await frame.click(resultsSelector);
+    await res.click({delay: 200}); // TODO: doesn't play inline and does weird stuff
+
+    // Download video
+    
+    // Close tab
+    await page2.close();
   });
 
   // const target = await new Promise(resolve => {
