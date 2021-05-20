@@ -1,4 +1,24 @@
-// https://pptr.dev/#?product=Puppeteer&version=v9.1.1&show=api-working-with-chrome-extensions
+// Config //
+
+// All pages to download
+var pages = [
+  {
+    url: "https://brightspace.vanderbilt.edu/d2l/common/dialogs/quickLink/quickLink.d2l?ou=269291&type=lti&rcode=vanderbiltprod-14704&srcou=6606&launchFramed=1&framedName=Media+Gallery",
+    type: "kaltura"
+  }
+];
+
+// Where to save downloaded video files
+const downloadPath = require('path').resolve('./download' // <-- Set this here
+                                            );
+
+// Whether to use a local HTML file for testing instead of `pages` declared above
+const testMode = false; //true;
+// //
+
+
+
+// Based on https://pptr.dev/#?product=Puppeteer&version=v9.1.1&show=api-working-with-chrome-extensions
 
 function sleep(ms) {
   return new Promise((resolve) => {
@@ -81,8 +101,33 @@ const start = async () => {
 start()
 */
 
-const assert = require('assert');
+// //
 
+const assert = require('assert');
+const path = require('path');
+const fs = require('fs');
+// Verify downloadPath
+//const downloadPathDirName = path.dirname(downloadPath);
+//if (!fs.stat(
+const sanitize = require("sanitize-filename"); // https://www.npmjs.com/package/sanitize-filename
+
+// https://stackoverflow.com/questions/3749231/download-file-using-javascript-jquery //
+// If you don't know the name or want to use
+// the webserver default set name = ''
+async function downloadURI(page, uri, name) 
+{
+  await page.evaluate(`
+    var link = document.createElement("a");
+    // If you don't know the name or want to use
+    // the webserver default set name = ''
+    link.setAttribute('download', '${name.replace(/"/g, '\\\"')}');
+    link.href = '${uri.replace(/"/g, '\\\"')}';` // Escape single quotes from the string (change " to \") ( https://stackoverflow.com/questions/15877778/function-to-escape-quotes-in-javascript )
+                      + `
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  `);
+}
 // //
 
 // Lib //
@@ -118,32 +163,81 @@ var runKaltura = async function(page) {
   });
   console.log(result.length);
 
+  // Grab title (example: "EECE 2112-01 Circuits I (2021S)") and make a folder for it in the downloads folder:
+  const title = await page.title();
+  console.log(title);
+  
+
   // Click each link
   await asyncForEach(result, async function(elementHandle) {
-    // https://pocketadmin.tech/en/puppeteer-open-link-in-new-tab/
-    const newPagePromise = new Promise(x => browser.once('targetcreated', target => x(target.page())));  // declare promise
-    await elementHandle.click({button : "middle"});       // click middle button, link open in a new tab
-    const page2 = await newPagePromise;                   // declare new tab, now you can work with it
-    await page2.bringToFront();                           // make the tab active
+    var retrying = true;
+    var retryNumber = 0;
+    while (retrying) {
+      // https://pocketadmin.tech/en/puppeteer-open-link-in-new-tab/
+      var newPagePromise = new Promise(x => browser.once('targetcreated', target => x(target.page())));  // declare promise
+      await elementHandle.click({button : "middle"});       // click middle button, link open in a new tab
+      const page2 = await newPagePromise;                   // declare new tab, now you can work with it
+      await page2.bringToFront();                           // make the tab active
 
-    // Grab the video after the page loads from the above click.
-    const sel = `#kplayer_ifp`; // Grab the element (in this case, it should be an iframe) with this id.        //`iframe[class*="d2l-iframe"]`; // https://stackoverflow.com/questions/21222375/css-selector-for-attribute-names-based-on-a-wildcard : {"
-    // E[foo*="bar"]
-    // an E element whose "foo" attribute value contains the substring "bar"
-    // "}
-    const frameHandle = await page2.waitForSelector(sel);
-    const frame = await frameHandle.contentFrame();
-    const resultsSelector = 'a.icon-play';
-    const res = await frame.waitForSelector(resultsSelector);
-    //const resArray = await frame.$$(resultsSelector);
-    // Push play
-    //await frame.click(resultsSelector);
-    await res.click({delay: 200}); // TODO: doesn't play inline and does weird stuff
+      // Grab the video after the page loads from the above click.
+      const sel = `#kplayer_ifp`; // Grab the element (in this case, it should be an iframe) with this id.        //`iframe[class*="d2l-iframe"]`; // https://stackoverflow.com/questions/21222375/css-selector-for-attribute-names-based-on-a-wildcard : {"
+      // E[foo*="bar"]
+      // an E element whose "foo" attribute value contains the substring "bar"
+      // "}
+      const frameHandle = await page2.waitForSelector(sel);
+      const frame = await frameHandle.contentFrame();
+      const resultsSelector = 'a.icon-play';
+      try {
+        const res = await frame.waitForSelector(resultsSelector);
+      } catch (error) {
+        // https://stackoverflow.com/questions/1433558/handling-specific-errors-in-javascript-think-exceptions
+        if (e instanceof TimeoutError) {
+          // specific error
 
-    // Download video
-    
-    // Close tab
-    await page2.close();
+          // We timed out, and this seems to happen sometimes: the play button doesn't show up. It seems we can close the page and try again, so we do that:
+          retryNumber = retryNumber + 1;
+          console.log("Retry number", retryNumber, "for timing out on", resultsSelector);
+          page2.close();
+          await sleep(4000);
+          continue; // Retry
+        } else {
+          throw e; // let others bubble up
+        }
+      }
+      //const resArray = await frame.$$(resultsSelector);
+      // Push play
+      //await frame.click(resultsSelector);
+      // We expect this to open a new tab, so we set up a promise for it:
+      newPagePromise = new Promise(x => browser.once('targetcreated', target => x(target.page())));  // declare promise
+      await res.click({delay: 200}); // Note: Doesn't play inline and does weird stuff compared to what regular Chrome does. But this seems to be ok, because it actually exposes the mp4 file as `https://cfvod.kaltura.com/pd/p/1821441/sp/182144100/serveFlavor/entryId/1_0u7l6ro1/v/1/ev/4/flavorId/1_yalya7hc/name/a.mp4` for example (see `notes/Screen Shot 2021-05-13 at 7.02.56 PM`). Then, you can right-click in the black areas around the video and press "Save As..." and get the mp4 file downloaded, so I think I'll use this.
+      const videoOnlyPage = await newPagePromise;                 // declare new tab, now you can work with it
+      await videoOnlyPage.bringToFront();                           // make the tab active
+
+      // Download video (mp4)
+      // https://www.scrapingbee.com/blog/download-file-puppeteer/
+      // Create folder
+      const destDir = path.join(downloadPath, sanitize(title, {replacement: '_'})); // Sanitize the string to be safe for use as a filename.
+      if (!fs.existsSync(destDir)){ // https://stackoverflow.com/questions/21194934/how-to-create-a-directory-if-it-doesnt-exist-using-node-js
+        fs.mkdirSync(destDir);
+      }
+      /* // Deprecated to do Page.setDownloadBehavior ( https://github.com/puppeteer/puppeteer/issues/4676 ):
+      await videoOnlyPage._client.send('Page.setDownloadBehavior', {
+        behavior: 'allow',
+        downloadPath: destDir
+      });
+      */
+      // Instead:
+      const cdpsession = await videoOnlyPage.target().createCDPSession();
+      cdpsession.send ("Browser.setDownloadBehavior", {behavior:"allow", downloadPath: destDir });
+      const videosource = await videoOnlyPage.waitForSelector('video>source');
+      const videosourceSrc = await (await videosource.getProperty('src')).jsonValue(); // https://stackoverflow.com/questions/49388467/getting-property-from-elementhandle
+      await downloadURI(videoOnlyPage, videosourceSrc, await videoOnlyPage.title());
+
+      // Close tabs
+      await videoOnlyPage.close();
+      await page2.close();
+      break; // Done, no need to retry
+    }
   });
 
   // const target = await new Promise(resolve => {
@@ -204,17 +298,6 @@ const page = await browser.newPage();
 
   // //
 }
-// //
-
-// Config //
-
-// All pages to download
-const pages = [
-  {url: "https://brightspace.vanderbilt.edu/d2l/common/dialogs/quickLink/quickLink.d2l?ou=269291&type=lti&rcode=vanderbiltprod-14704&srcou=6606&launchFramed=1&framedName=Media+Gallery" , type: "kaltura"}
-];
-
-
-const testMode = false; //true;
 // //
 
 // Make "global" variables, for testing in the REPL:
