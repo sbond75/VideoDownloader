@@ -120,14 +120,29 @@ async function downloadURI(page, uri, name)
     var link = document.createElement("a");
     // If you don't know the name or want to use
     // the webserver default set name = ''
-    link.setAttribute('download', '${name.replace(/"/g, '\\\"')}');
-    link.href = '${uri.replace(/"/g, '\\\"')}';` // Escape single quotes from the string (change " to \") ( https://stackoverflow.com/questions/15877778/function-to-escape-quotes-in-javascript )
+    link.setAttribute('download', "${name.replace(/"/g, '\\\"')}");
+    link.href = "${uri.replace(/"/g, '\\\"')}";` // Escape double quotes from the string (change " to \") ( https://stackoverflow.com/questions/15877778/function-to-escape-quotes-in-javascript )
                       + `
     document.body.appendChild(link);
     link.click();
     link.remove();
   `);
 }
+
+// Workaround to rename downloaded files once they are downloaded
+// https://github.com/puppeteer/puppeteer/issues/4676
+// make sure tempDownloadDir is an empty directory
+async function waitForDownload(tempDownloadDir, downloadDir) {
+  let filename;
+  while (!filename || filename.endsWith('.crdownload')) {
+    filename = fs.readdirSync(tempDownloadDir)[0];
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+  if (filename !== undefined) {
+    fs.renameSync(path.join(tempDownloadDir, filename), path.join(downloadDir, filename));
+  }
+  return filename;
+};
 // //
 
 // Lib //
