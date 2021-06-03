@@ -1,0 +1,6 @@
+[submodule "ChromeExtensions/downloads-overwrite-already-existing-files"]
+	path = ChromeExtensions/downloads-overwrite-already-existing-files
+	url = https://github.com/zach-adams/downloads-overwrite-already-existing-files
+[submodule "ChromeExtensions/Modified/downloads-overwrite-already-existing-files"]
+	path = ChromeExtensions/Modified/downloads-overwrite-already-existing-files
+	url = https://github.com/sbond75/downloads-overwrite-already-existing-files

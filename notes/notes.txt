@@ -1,0 +1,13 @@
+Zoom
+- Chat
+- Time
+- All videos (multiple in each "Recording Details")
+- Subtitles?
+
+Need to re-test kaltura since I changed `downloadURI`-related stuff
+
+Kaltura
+- [done] Title
+- [done] Time
+- [done] All videos
+- [Probably not easy to do, but I didn't see any subtitles for videos in EECE 2112 Circuits I] Subtitles?
