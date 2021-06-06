@@ -1,0 +1,32 @@
+{
+    "extName": {
+        "message": "No More Duplicates"
+    },
+    "extShortName": {
+        "message": "NoDupes"
+    },
+    "extDescription": {
+        "message": "Avoid downloads of files you already have!"
+    },
+    "fileExistsTitle": {
+        "message": "File already exists"
+    },
+    "fileExistsMessage": {
+        "message": "It seems like the file $fileName$ already exists",
+        "placeholders":{
+            "fileName": {
+                "content": "$1",
+                "example": "It seems like the file FOO.BAR already exists"
+            }
+        }
+    },
+    "contextMessage": {
+        "message": "Click to show the file"
+    },
+    "btnOpenExistingFile": {
+        "message": "Open existing file"
+    },
+    "btnDownloadAnyway": {
+        "message": "Download anyway"
+    }
+}

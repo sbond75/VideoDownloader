@@ -47,6 +47,7 @@ function sleep(ms) {
 const puppeteer = require('puppeteer');
 const streamRecorderExtensionFolderName = 'ChromeExtensions/StreamRecorder/extension_1_3_3_0'; //'my-extension'
 const modifiedDownloadExtensionFolderName = 'ChromeExtensions/Modified/downloads-overwrite-already-existing-files';
+const noMoreDuplicatesExtensionFolderName = 'ChromeExtensions/No-More-Duplicates_v1.4';
 
 // readline //
 
@@ -149,8 +150,11 @@ async function downloadURL_chromeWithoutWebSecurity(page, uri, name, downloadDir
   `);
 }
 // Downloads any file with Chrome using the given async function `downloadFunc`. It then returns the name of the downloaded file, since it expects Chrome to place it in `downloadDir`.
-// Precondition: the downloaded file that is downloaded via `downloadFunc` does not end in `.crdownload`.
-async function waitForDownload(downloadDir, name, downloadFunc) {
+// `isCancelledFunc` is an optional async function that returns true if this `waitForDownload` function should abort while waiting for the download. Useful if the download should stop for some reason. If cancelled, this `waitForDownload` function returns null.
+// Preconditions:
+// - 1. The downloaded file that is downloaded via `downloadFunc` does not end in `.crdownload`.
+// - 2. `name` is a valid file name.
+async function waitForDownload(downloadDir, name, downloadFunc, isCancelledFunc /* Optional async function, see explanation above */) {
   /*let*/ filesInitiallyInDownloadDir = /*await*/ fs.readdirSync(downloadDir);
 
   // Start the download
@@ -160,15 +164,21 @@ async function waitForDownload(downloadDir, name, downloadFunc) {
   // Wait for a new file to appear in the download path
   var checkCount = 0;
   while (true) {
+    // Check for cancellation
+    if (isCancelledFunc !== undefined && await isCancelledFunc() === true) {
+      console.log("Download " + (name != null ? (" of \"" + name + "\"") : "") + "was cancelled");
+      return null;
+    }
+    
     filesInDownloadDir = /*await*/ fs.readdirSync(downloadDir);
     if (filesInDownloadDir.length > filesInitiallyInDownloadDir.length) {
       break;
     }
-    if (checkCount % 200 == 0) {
-      console.log("Waiting for download of \"" + name + "\" to start (waiting for a new file to appear in \"" + downloadDir + "\")...");
+    if (checkCount % 10 == 0) {
+      console.log("Waiting for download " + (name != null ? ("of \"" + name + "\" to ") : "") + "start (waiting for a new file to appear in \"" + downloadDir + "\")...");
     }
     checkCount = checkCount + 1;
-    await sleep(20);
+    await sleep(1000);
   }
 
   // Wait for the download to finish:
@@ -188,7 +198,7 @@ async function waitForDownload(downloadDir, name, downloadFunc) {
       if (file.endsWith('.crdownload')) { // [done, checked if uri ends in crdownload above]FIXED: This hangs forever if the downloaded file is literally called `<something>.crdownload`! Rare but possible... [now fixed.]
         crDownload = true; // We have a crdownload file
         if (checkCount % 10 == 0) {
-          console.log("Waiting for download of \"" + name + "\" to finish (waiting for \"" + file + "\" to go away)...");
+          console.log("Waiting for download " + (name != null ? ("of \"" + name + "\"") : "") + "to finish (waiting for \"" + file + "\" to go away)...");
         }
         checkCount = checkCount + 1;
         await sleep(1000);
@@ -216,6 +226,10 @@ async function waitForDownload(downloadDir, name, downloadFunc) {
   assert(newFilesNotInInitialArray.length == 1);
   // path.basename(uri) may or may not be equal to newFilesNotInInitialArray[0], so we use the actual filename (newFilesNotInInitialArray[0]):
   let downloadedFileName = newFilesNotInInitialArray[0];
+  console.log({"downloadedFileName": downloadedFileName, "name": name});
+  if (name != null) {
+    assert(downloadedFileName === name); // Sanity check for when we sanitize(name) outside this function (see Precondition #2 in comment before this function's header). We want to ensure that Chrome sanitizes downloaded file names the same way that `sanitize()` does (there's probably some edge case I don't know about, either in Chrome now or in the future... could check Chromium source code I suppose, but they may change it in the future anyway). So if this assertion fails, maybe you could modify `sanitize` to be more or less aggressive.
+  }
   return downloadedFileName;
 }
 // Appends the file extension to `name` automatically based on the downloaded file's extension.
@@ -372,6 +386,27 @@ var waitForSelector = async function(page, sel, pageDescription /* Optional para
 
   return res;
 };
+// Navigates back in the navigation history of `page` without waiting for `page.waitForNavigation`.
+var goBackWithoutWait = async function(page) {
+  // Inlined `async _go(delta, options)` function from `node_modules/puppeteer/lib/cjs/puppeteer/common/Page.js`: //
+  const history = await page._client.send('Page.getNavigationHistory');
+  const delta = -1; // -1 to go back, 1 to go forward, as seen in `node_modules/puppeteer/lib/cjs/puppeteer/common/Page.js`
+  const entry = history.entries[history.currentIndex + delta];
+  var resObject; // https://pptr.dev/#?product=Puppeteer&version=v10.0.0&show=api-cdpsessionsendmethod-paramargs says that `cdpSession.send` returns an Object.
+  if (!entry) {
+    console.log("Can't go back");
+    resObject = null;
+  }
+  else {
+    const result = await Promise.all([
+      //page.waitForNavigation(options), // <-- The culprit of hanging mentioned above
+      page._client.send('Page.navigateToHistoryEntry', { entryId: entry.id }),
+    ]);
+    resObject = result[0];
+  }
+  // //
+  return resObject;
+};
 
 // Gets the iframe common to video list Brightspace pages.
 var getD2LIFrame = async function(page) {
@@ -385,7 +420,7 @@ var getD2LIFrame = async function(page) {
   return frame;
 }
 // Downloads all Kaltura videos on the given Brightspace `page` that contains an iframe for the list of Kaltura video thumbnails.
-var runKaltura = async function(page) {
+var runKaltura = async function(page, usedFileNames) {
   const frame = await getD2LIFrame(page);
   
   var computeVideoList = async function() {
@@ -576,7 +611,7 @@ const page = await browser.newPage();
   console.log("Done!");
 }
 
-var runZoom = async function(page) {
+var runZoom = async function(page, usedFileNames) {
   const frame = await getD2LIFrame(page);
 
   var clickPreviousMeetings = async function() {
@@ -608,6 +643,7 @@ var runZoom = async function(page) {
   var indexIntoResult = 0;
   var i;
   var result;
+  var pageIndex = 0;
   while (true) {
     //await asyncForEach(result, async function(elementHandle) {
     for (i = 0; i < result.length; i++) {
@@ -667,7 +703,9 @@ var runZoom = async function(page) {
           //throw "";
           // Get the parent of the button
           const button_parent = (await button.$x('..'))[0]; // Element Parent ( https://stackoverflow.com/questions/52179280/how-do-i-get-parent-and-siblings-of-elementhandle-in-nodejs/52189574#52189574 )
-          const subtitleFileName = sanitize(downloadedVideoFileName !== undefined ? downloadedVideoFileName.replace(/.mp4$/ /* <-- Regex to match .mp4 at the end of the string */, '.srt') : await (await button_parent.getProperty('download')).jsonValue(), {replacement: '_'}) + (allVideos.length > 1 ? (subvideoIndex + 1) : ""); // We also append a sub-video index to the subtitles if there are more than one sub-videos
+          const subtitleFileName = sanitize(downloadedVideoFileName !== undefined ? downloadedVideoFileName.replace(/.mp4$/ /* <-- Regex to match .mp4 at the end of the string */, '.srt') : await (await button_parent.getProperty('download')).jsonValue(), {replacement: '_'});
+          // [NVM:] + (allVideos.length > 1 ? (subvideoIndex + 1) : ""); // We also append a sub-video index to the subtitles if there are more than one sub-videos
+          
           // Change the button's `download` attribute (which is a file name) to be this sanitized one above
             // NOTE: This xpath doesn't work when used in the page.evaluate(): `const subLink = getElementByXpath("//*[text()[contains(., 'Download Chat')]]").parentNode; // Escape double quotes from the string` or `getElementByXpath("${downloadSubtitlesXPath.replace(/"/g, '\\\"')}").parentNode;`
           // await page.evaluate(`
@@ -719,8 +757,9 @@ var runZoom = async function(page) {
         var injected = false;
         try {
           // First, listen to responses from HTTP requests so we can check the downloaded file's name and rename it before Chrome downloads it again, i.e. if we have it already
+          var cancelledDownload = false; // We click the button assuming that the download is desired, then cancel it if Chrome makes an HTTP request for a file that is something we already downloaded
+          var reportedVideoFileNameAfterCancelledDownload = null;
           // https://www.checklyhq.com/learn/headless/request-interception/
-          await videoOnlyPage.setRequestInterception(true); // "Activating request interception enables request.abort, request.continue and request.respond methods. This provides the capability to modify network requests that are made by a page." ( https://pptr.dev/#?product=Puppeteer&version=v9.1.1&show=api-pagesetrequestinterceptionvalue-cachesafe )
           videoOnlyPage.on('request', async (request) => {
             //if (request.url().endsWith(".mp4")) { // <-- doesn't work because requests often look like "GET https://ssrweb.zoom.us/replay03/2021/04/29/74A106D2-400A-41DE-805C-575236956447/GMT20210429-143543_Recording_640x360.mp4?response-content-type=video%2Fmp4&response-cache-control=max-age%3D0%2Cs-maxage%3D86400&data=81fef41779cd7b07965c37d8d6c50084ce89aff0b30cdf450512e2bd90f6af5e&s001=yes&cid=aw1&fid=HBnyhsc1etF1NK7YHvrqC7b12nT-zfG30akNblPFrMmDsYDp-UZW6gi_PjpDo_caKVHT4HTF9nI_TDjm.YUMaC1ZSQ2X0Q2wb&s002=-7ACY6BsfcPkhkibO7TQXu2lq4rOMVjhLgzZ-y0qdkgq2Emg7zJR2Iwl9g.whV5ipZjG5kRKdP9&Policy=eyJTdGF0ZW1lbnQiOiBbeyJSZXNvdXJjZSI6Imh0dHBzOi8vc3Nyd2ViLnpvb20udXMvcmVwbGF5MDMvMjAyMS8wNC8yOS83NEExMDZEMi00MDBBLTQxREUtODA1Qy01NzUyMzY5NTY0NDcvR01UMjAyMTA0MjktMTQzNTQzX1JlY29yZGluZ182NDB4MzYwLm1wND9yZXNwb25zZS1jb250ZW50LXR5cGU9dmlkZW8lMkZtcDQmcmVzcG9uc2UtY2FjaGUtY29udHJvbD1tYXgtYWdlJTNEMCUyQ3MtbWF4YWdlJTNEODY0MDAmZGF0YT04MWZlZjQxNzc5Y2Q3YjA3OTY1YzM3ZDhkNmM1MDA4NGNlODlhZmYwYjMwY2RmNDUwNTEyZTJiZDkwZjZhZjVlJnMwMDE9eWVzJmNpZD1hdzEmZmlkPUhCbnloc2MxZXRGMU5LN1lIdnJxQzdiMTJuVC16ZkczMGFrTmJsUEZyTW1Ec1lEcC1VWlc2Z2lfUGpwRG9fY2FLVkhUNEhURjluSV9URGptLllVTWFDMVpTUTJYMFEyd2ImczAwMj0tN0FDWTZCc2ZjUGtoa2liTzdUUVh1MmxxNHJPTVZqaExneloteTBxZGtncTJFbWc3ekpSMkl3bDlnLndoVjVpcFpqRzVrUktkUDkiLCJDb25kaXRpb24iOnsiRGF0ZUxlc3NUaGFuIjp7IkFXUzpFcG9jaFRpbWUiOjE2MjI0OTY4Nzh9fX1dfQ__&Signature=aziuRZPu8aHh5e6TTAh8vdeyXPs92RYKUuyL7VGLLA~4iwMLIn1uCVPs9WokiE70tPOq~~qVdOKRFz-tNRzqN1RADlV-VhGaWmL-7idby124HQH5NAEWCL~HZDmavxkLP0i2v7q3thkzAVpawF2Q4HFokx5i2IRn~f4PbtBLKtGZx~AOy9KWPlpgexIYVNasPpkJJHwze-2HryeabBrZUCmtZk1mltkjQhW09IC2hjF8MGylIgGW0QR0blTYDNu-tuZFON~z3~QS1Juz61i6~QfTCI0YPD4RGBqCOwj2~fWQnfAz5ULioX5AXLXinxM0igKhtX~O1dNmozuWmXQcLg__&Key-Pair-Id=APKAJFHNSLHYCGFYQGIA"
             const isMP4 = request.url().includes(".mp4");
@@ -738,7 +777,7 @@ var runZoom = async function(page) {
               const matches = url.match(re);
               if (matches != null && matches[1] != undefined) { // [0] is the match, and [1] is the first capture group ([2] is the second capture group, and so on) (demo: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Regular_Expressions/Groups_and_Ranges )
                 // Then we have a match
-                const fname = matches[1];
+                const fname = sanitize(matches[1], {replacement: '_'});
                 console.log("Found matching video or subtitles filename in URL:", fname);
 
                 // Check if this file exists, and then decide whether to skip the existing download
@@ -747,6 +786,10 @@ var runZoom = async function(page) {
                   // Skip it
                   console.log("Download for", fname, "already exists, skipping");
                   await request.abort("aborted"); // "aborted - An operation was aborted (due to user action)." ( https://pptr.dev/#?product=Puppeteer&version=v9.1.1&show=api-httprequestaborterrorcode )
+                  // Notify the `waitForDownload` function that we skipped the download so that it cancels the waiting
+                  cancelledDownload = true;
+                  // And set the filename
+                  reportedVideoFileNameAfterCancelledDownload = fname;
                   return;
                 }
               }
@@ -757,11 +800,20 @@ var runZoom = async function(page) {
           //   console.log('<<', response.status(), response.url());
           // })
           
+          await videoOnlyPage.setRequestInterception(true); // "Activating request interception enables request.abort, request.continue and request.respond methods. This provides the capability to modify network requests that are made by a page." ( https://pptr.dev/#?product=Puppeteer&version=v9.1.1&show=api-pagesetrequestinterceptionvalue-cachesafe )
+          
           // Click the download button, if we can find it (else, a TimeoutError is thrown and caught)
           const downloadButton = await videoOnlyPage.waitForSelector('.download-btn');
-          const downloadedVideoFileName = await waitForDownload(destDir, null, async () => {
+          var downloadedVideoFileName = await waitForDownload(destDir, null /* The video has an unknown file name at this point */, async () => { // downloadFunc
+            console.log("Clicking download button");
             await downloadButton.click({delay: 200});
+          }, async () => { // isCancelledFunc
+            return cancelledDownload;
           });
+          // Check for cancelled download, and use our backup filename if so
+          if (downloadedVideoFileName == null) {
+            downloadedVideoFileName = reportedVideoFileNameAfterCancelledDownload;
+          }
 
           // We made it this far with no exceptions, so now we can download the subtitles too
           await runInjectedScript();
@@ -791,7 +843,8 @@ var runZoom = async function(page) {
       // Done with this video; prepare for the next iteration //
 
       // Go back to the list of all videos
-      /*await*/ page.goBack({timeout: 0}).then(async (httpResponse) => { console.log("Finished page.goBack() in background with HTTP response:", httpResponse); }); // When going back, it hangs forever but actually does go back. So we don't "await" this promise and instead let it hang forever... might use up some CPU or memory to have the promise hanging around?
+      ///*await*/ page.goBack({timeout: 0}).then(async (httpResponse) => { console.log("Finished page.goBack() in background with HTTP response:", httpResponse); }); // When going back, it hangs forever but actually does go back. So we don't "await" this promise and instead let it hang forever... might use up some CPU or memory to have the promise hanging around?
+      await goBackWithoutWait(page);
 
       // Click on the "Previous Meetings" button:
       await clickPreviousMeetings();
@@ -801,18 +854,27 @@ var runZoom = async function(page) {
       // //
     }
     
-    // Go to the next page
-    const nextSelector = "a.ant-pagination-next";
-    await frame.waitForSelector(nextSelector);
-    const nextSelectorParent = "li.ant-pagination-disabled.ant-pagination-next"; // Says if the next button is disabled, meaning we're done
-    if (frame.$(nextSelectorParent) != null) {
-      // Then we can't go to the next page, so we're done
-      break;
+    // Go to the next page again as many times as for the current index
+    pageIndex++;
+    var j;
+    var noNextPage = false; // Assume false
+    for (j = 0; j < pageIndex; j++) {
+      const nextSelector = "li.ant-pagination-next";
+      await frame.waitForSelector(nextSelector);
+      const nextSelectorParent = "li.ant-pagination-disabled.ant-pagination-next"; // Says if the next button is disabled, meaning we're done
+      if (frame.$(nextSelectorParent) != null) {
+        // Then we can't go to the next page, so we're done
+        noNextPage = true;
+        break;
+      }
+      // Go to the next page
+      console.log("Going to the next page...");
+      const next = await frame.$$(nextSelector);
+      await next.click({delay: 200});
     }
-    // Go to the next page
-    console.log("Going to the next page...");
-    const next = await frame.$$(nextSelector);
-    await next.click({delay: 200});
+    if (noNextPage) {
+      break; // We're done
+    }
     i = 0; // Reset index
     
     // Recompute video list
@@ -833,8 +895,9 @@ var newFilesNotInInitialArray = null;
 (async () => {
   try {
     const pathToStreamRecorderExtension = require('path').join(__dirname, streamRecorderExtensionFolderName);
-    const pathToModifiedDownloadExtension = require('path').join(__dirname, modifiedDownloadExtensionFolderName); // NOTE: This modified extension doesn't seem to work -- downloads still replace existing ones (at least for the Zoom downloads) even with `conflictAction: 'uniquify'` (see bottom of `ChromeExtensions/Modified/downloads-overwrite-already-existing-files/bg.js`)
-    const allExtensions = `${pathToStreamRecorderExtension},${pathToModifiedDownloadExtension}`;
+    //const pathToModifiedDownloadExtension = require('path').join(__dirname, modifiedDownloadExtensionFolderName); // NOTE: This modified extension doesn't seem to work -- downloads still replace existing ones (at least for the Zoom downloads) even with `conflictAction: 'uniquify'` (see bottom of `ChromeExtensions/Modified/downloads-overwrite-already-existing-files/bg.js`)
+    const pathToNoMoreDuplicatesExtension = require('path').join(__dirname, noMoreDuplicatesExtensionFolderName);
+    const allExtensions = `${pathToStreamRecorderExtension},${pathToNoMoreDuplicatesExtension}`; //`${pathToStreamRecorderExtension},${pathToModifiedDownloadExtension}`;
     /*const*/ browser = await puppeteer.launch({
       headless: false,
       args: [
@@ -842,6 +905,7 @@ var newFilesNotInInitialArray = null;
         `--load-extension=${allExtensions}`, // [nvm:] We will actually load the pathToModifiedDownloadExtension extension later, so we don't pass it here.
         `--whitelisted-extension-id=iogidnfllpdhagebkblkgbfijkbkjdmm`, // StreamRecorder -- https://chrome.google.com/webstore/detail/stream-recorder-download/iogidnfllpdhagebkblkgbfijkbkjdmm?hl=en
         `--whitelisted-extension-id=lddjgfpjnifpeondafidennlcfagekbp`, // downloads-overwrite-already-existing-files -- https://chrome.google.com/webstore/detail/downloads-overwrite-alrea/lddjgfpjnifpeondafidennlcfagekbp?hl=en-US
+        `--whitelisted-extension-id=kbgnggldhcmgacmfnohlmmmhlhnmacda`,// Update: need to click the extension, then click the three dots menu next to its name ("No More Duplicates") and it will open an invalid webstore page. Grab that extension id and put it here.             // Nvm this: `--whitelisted-extension-id=cjbfhofimhehhnllibmhammbemaboleh`, // https://chrome.google.com/webstore/detail/no-more-duplicates/cjbfhofimhehhnllibmhammbemaboleh/
         // https://stackoverflow.com/questions/65049531/puppeteer-iframe-contentframe-returns-null :
         '--disable-web-security',
         '--disable-features=IsolateOrigins,site-per-process'
@@ -875,6 +939,7 @@ var newFilesNotInInitialArray = null;
       await getLine();
       console.log("Running...");
       
+      var usedFileNames = new Map(); // File names that were used in the current download destination folder (which can change, in which case this variable resets to an empty Map). Before downloading or checking if a file name exists, we check if the file name is in this hashmap. If so, we warn in the console and download it with _1 or _2 and so on (value from the hashmap) appended before the .mp4 or .srt extension, and increment the number value in the hashmap. If the file name didn't exist in the hashmap, add it with a new value of 0. ( https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Map )
       // Go through each URL given
       //await page.waitForNavigation(); // Wait for previous thing to load
       await asyncForEach(pages, async function(specifier) {
@@ -884,11 +949,15 @@ var newFilesNotInInitialArray = null;
         }
         console.log("---- Processing", specifier, "----");
         await page.goto(specifier.url);
+        
+        // Clear hashmap for file names
+        usedFileNames.clear();
+        
         if (specifier.type == 'kaltura') {
-          await runKaltura(page);
+          await runKaltura(page, usedFileNames);
         }
         else if (specifier.type == 'zoom') {
-          await runZoom(page);
+          await runZoom(page, usedFileNames);
         }
         else {
           throw `Invalid video list type "${specifier.type}" specified for "${specifier.url}"`;

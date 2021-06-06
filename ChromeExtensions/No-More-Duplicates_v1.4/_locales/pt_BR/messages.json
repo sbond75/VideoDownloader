@@ -1,0 +1,32 @@
+{
+    "extName": {
+        "message": "Chega de Duplicidades"
+    },
+    "extShortName": {
+        "message": "SemDuplicidades"
+    },
+    "extDescription": {
+        "message": "Evite downloa de arquivos que você já tem!"
+    },
+    "fileExistsTitle": {
+        "message": "Este arquivo já existe"
+    },
+    "fileExistsMessage": {
+        "message": "Parece que o arquivo $fileName$ já existe",
+        "placeholders":{
+            "fileName": {
+                "content": "$1",
+                "example": "Parece que o arquivo FOO.BAR já existe"
+            }
+        }
+    },
+    "contextMessage": {
+        "message": "Clique para exibir o arquivo"
+    },
+    "btnOpenExistingFile": {
+        "message": "Abrir o arquivo existente"
+    },
+    "btnDownloadAnyway": {
+        "message": "Baixar mesmo assim"
+    }
+}

@@ -73,7 +73,7 @@ function insertButtons() {
   try {
     dateRegex = /ssrweb.zoom.us\/[^\/]*\/replay\/(\d+)\/(\d+)\/(\d+)/;
     dateMatch = URL.match(dateRegex, URL);
-    date = dateMatch[2] + dateMatch[3] + dateMatch[1];
+    date = dateMatch[1] + dateMatch[2] + dateMatch[3];
   }
   catch (e) {
     if (e instanceof TypeError) {
@@ -83,13 +83,35 @@ function insertButtons() {
       dateRegex = /:\/\/ssrweb.zoom.us\/?[^\/]*\/replay\d+?\/(\d+)\/(\d+)\/(\d+)/; ///:\/\/ssrweb.zoom.us\/replay\/(\d+)\/(\d+)\/(\d+)/; ///ssrweb.zoom.us\/[^\/]*\/replay\/(\d+)\/(\d+)\/(\d+)/; // Matches something like `https://ssrweb.zoom.us/replay03/2021/04/29/74A106D2-400A-41DE-805C-575236956447/GMT20210429-143543_Recording_640x360.mp4?response-content-type=video%2Fmp4&response-cache-control=max-age%3D0%2Cs-maxage%3D86400&data=1c5b6542876f31472e7e50503546110bd9661802c09014b49b63a1848a346fb8&s001=yes&cid=aw1&fid=Rb08wbUnjf7Cb3fkk8iXHD_WpCtVUVm-dXHbdDDNkSpf9x6U5xUEkRFBRiDsm2EUw3HQWFydodRQBaF2.D0bvFvs45Rx_Ri_4&s002=E0jFAiER_687_cIUA3pAXVgKplfheHGTB8NaUg30zBk6q-wU0lY9Y8HPsw.GDsxktyCdDWm3bxk&Policy=eyJTdGF0ZW1lbnQiOiBbeyJSZXNvdXJjZSI6Imh0dHBzOi8vc3Nyd2ViLnpvb20udXMvcmVwbGF5MDMvMjAyMS8wNC8yOS83NEExMDZEMi00MDBBLTQxREUtODA1Qy01NzUyMzY5NTY0NDcvR01UMjAyMTA0MjktMTQzNTQzX1JlY29yZGluZ182NDB4MzYwLm1wND9yZXNwb25zZS1jb250ZW50LXR5cGU9dmlkZW8lMkZtcDQmcmVzcG9uc2UtY2FjaGUtY29udHJvbD1tYXgtYWdlJTNEMCUyQ3MtbWF4YWdlJTNEODY0MDAmZGF0YT0xYzViNjU0Mjg3NmYzMTQ3MmU3ZTUwNTAzNTQ2MTEwYmQ5NjYxODAyYzA5MDE0YjQ5YjYzYTE4NDhhMzQ2ZmI4JnMwMDE9eWVzJmNpZD1hdzEmZmlkPVJiMDh3YlVuamY3Q2IzZmtrOGlYSERfV3BDdFZVVm0tZFhIYmRERE5rU3BmOXg2VTV4VUVrUkZCUmlEc20yRVV3M0hRV0Z5ZG9kUlFCYUYyLkQwYnZGdnM0NVJ4X1JpXzQmczAwMj1FMGpGQWlFUl82ODdfY0lVQTNwQVhWZ0twbGZoZUhHVEI4TmFVZzMwekJrNnEtd1UwbFk5WThIUHN3LkdEc3hrdHlDZERXbTNieGsiLCJDb25kaXRpb24iOnsiRGF0ZUxlc3NUaGFuIjp7IkFXUzpFcG9jaFRpbWUiOjE2MjE5ODI1ODB9fX1dfQ__&Signature=aJK5k5-sT9xHojKQ7k9M8hY4P8xvtS3mvdeNFmVXL5YMsLGE0in6HX6irzrYIXU5kcSBpF2XSI4pHeSkRpwDnP0CoLbuiGzjSOHLyxR5XoK2jnK9UuAUxirtnNisUBab72hll-gmB06duDLw7xdxouR~h4lVU587R4ODOnkGROyFWSW19bzYqItmd1ZhqXQ~7ygKdEE~7vnyEJX0HbvcQ1s4LONdT9jTNZxOyQN7rAfoCc4RkTmEZqKQNz7zrAgtio0qvj7EXXpO8jKovRq1VflCbHHbcwEPNAhIwpPOMfmxSqhsJv8eK11Yd5Yn7yFZw0Crz4Uy9eqL1QkHaveVdg__&Key-Pair-Id=APKAJFHNSLHYCGFYQGIA`
       dateMatch = URL.match(dateRegex, URL);
       console.log(dateMatch);
-      date = dateMatch[2] + dateMatch[3] + dateMatch[1];
+      date = dateMatch[1] + dateMatch[2] + dateMatch[3];
       console.log(date);
     } else {
       throw e; // let others bubble up
     }
   }
-  title = topic + "_" + date;
+  // Get Unix time of the video (example: 1619706943000 is `Thursday, April 29, 2021 2:35:43 GMT` PM but in my time zone it is: `Thursday, April 29, 2021 9:35:43 AM GMT-05:00 DST` ( https://www.epochconverter.com/ ). This GMT time seems to be used in determining the filename when downloaded with Zoom's own download button instead of ours in this file, but we recreate that a bit here by adding the time, since multiple videos on the same day likely have unique filenames... but see the below fixme.
+  // FIXME: possibly not an issue: (issue if they are the same second.. but in one Zoom meeting area that shouldn't happen?!). We could always add the `window.__data__.recordingId` onto it if that happens I guess. For example: `meetingId: 'dKEG0kAKQd6AXFdSNpVkRw%3D%3D', recordingId: 'eb3a8e09-866c-4a2c-a7b8-96b26172e50d'` are in the JSON within JavaScript in the html of the Zoom video pages, under this element: `<script nonce="">`
+  // https://stackoverflow.com/questions/847185/convert-a-unix-timestamp-to-time-in-javascript //
+  let unix_timestamp = window.__data__.fileStartTime; // Demo: 1549312452
+  // Create a new JavaScript Date object based on the timestamp
+  // multiplied by 1000 so that the argument is in milliseconds, not seconds.
+  var date = new Date(unix_timestamp * 1000);
+  // // Hours part from the timestamp
+  // var hours = date.getHours();
+  // // Minutes part from the timestamp
+  // var minutes = "0" + date.getMinutes();
+  // // Seconds part from the timestamp
+  // var seconds = "0" + date.getSeconds();
+
+  // // Will display time in 10:30:23 format
+  // var formattedTime = hours + ':' + minutes.substr(-2) + ':' + seconds.substr(-2);
+
+  //console.log(formattedTime);
+
+  // https://www.codegrepper.com/code-examples/javascript/js+get+current+time+24+hours , https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date/toLocaleTimeString
+  const time = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: 'GMT' }); // Get 24-hour time. For date too, do toLocaleString with the same args.
+  // //
+  title = topic + "_" + date + "_" + time.replaceAll(':', '');
   //const title = "%PLACEHOLDER_TITLE%"; // Hack: placeholder to be inserted via VideoDownloader code
   
   // Add a subtitles button to the page
