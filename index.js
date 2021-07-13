@@ -154,9 +154,188 @@ async function downloadURL_chromeWithoutWebSecurity(page, uri, name, downloadDir
 // Preconditions:
 // - 1. The downloaded file that is downloaded via `downloadFunc` does not end in `.crdownload`.
 // - 2. `name` is a valid file name.
-async function waitForDownload(downloadDir, name, downloadFunc, isCancelledFunc /* Optional async function, see explanation above */) {
+// NOTE: If this function ends up downloading a file with a name that already exists, Chromium replaces the existing file for some reason. This causes this function to hang forever, because it will be waiting for a *new* file to be created. In a way, this is good because there should never be any overwriting.
+async function waitForDownload(downloadDir, name, downloadFunc, isCancelledFunc /* Optional async function, see explanation on the second line above */, page_ /* Optional. If provided, the `waitForDownload` function will abort/cancel if HTTP requests made by this `page_` refer to files that already exist in `downloadDir`. */, onSetReportedVideoFileNameAfterCancelledDownload /* Optional async function that receives (as a single argument) the video file name that was reported by the HTTP request but when this request was cancelled. */) {
   /*let*/ filesInitiallyInDownloadDir = /*await*/ fs.readdirSync(downloadDir);
 
+  var downloadFinished = async function() {
+    // Download finished, so turn off HTTP request interception if we have a page
+    if (page_ !== undefined) {
+      //await page_.setRequestInterception(false); // It doesn't seem like request interception can be turned back off, since it keeps causing errors like `UnhandledPromiseRejectionWarning: Error: Request Interception is not enabled!`
+    }
+  };
+  var newDownloadDir = null;
+  var afterDownloadCompletedHandler = null;
+  var setDownloadDir = async function(newDownloadDir_, afterDownloadCompletedHandler_ /* async function */) {
+    // Changes the download directory, useful if the ` page_.on('request'` handler needs to put something in the Temp or Duplicates folder, etc.
+    newDownloadDir = newDownloadDir_;
+    afterDownloadCompletedHandler = afterDownloadCompletedHandler_;
+  };
+
+  var cancelledDownload = false; // We click the button assuming that the download is desired, then cancel it if Chrome makes an HTTP request for a file that is something we already downloaded
+  var reportedVideoFileNameAfterCancelledDownload = null;
+  if (page_ !== undefined) {
+    // First, listen to responses from HTTP requests so we can check the downloaded file's name and rename it before Chrome downloads it again, i.e. if we have it already
+    // https://www.checklyhq.com/learn/headless/request-interception/
+    page_.on('request', async (request) => {
+      //if (request.url().endsWith(".mp4")) { // <-- doesn't work because requests often look like "GET https://ssrweb.zoom.us/replay03/2021/04/29/74A106D2-400A-41DE-805C-575236956447/GMT20210429-143543_Recording_640x360.mp4?response-content-type=video%2Fmp4&response-cache-control=max-age%3D0%2Cs-maxage%3D86400&data=81fef41779cd7b07965c37d8d6c50084ce89aff0b30cdf450512e2bd90f6af5e&s001=yes&cid=aw1&fid=HBnyhsc1etF1NK7YHvrqC7b12nT-zfG30akNblPFrMmDsYDp-UZW6gi_PjpDo_caKVHT4HTF9nI_TDjm.YUMaC1ZSQ2X0Q2wb&s002=-7ACY6BsfcPkhkibO7TQXu2lq4rOMVjhLgzZ-y0qdkgq2Emg7zJR2Iwl9g.whV5ipZjG5kRKdP9&Policy=eyJTdGF0ZW1lbnQiOiBbeyJSZXNvdXJjZSI6Imh0dHBzOi8vc3Nyd2ViLnpvb20udXMvcmVwbGF5MDMvMjAyMS8wNC8yOS83NEExMDZEMi00MDBBLTQxREUtODA1Qy01NzUyMzY5NTY0NDcvR01UMjAyMTA0MjktMTQzNTQzX1JlY29yZGluZ182NDB4MzYwLm1wND9yZXNwb25zZS1jb250ZW50LXR5cGU9dmlkZW8lMkZtcDQmcmVzcG9uc2UtY2FjaGUtY29udHJvbD1tYXgtYWdlJTNEMCUyQ3MtbWF4YWdlJTNEODY0MDAmZGF0YT04MWZlZjQxNzc5Y2Q3YjA3OTY1YzM3ZDhkNmM1MDA4NGNlODlhZmYwYjMwY2RmNDUwNTEyZTJiZDkwZjZhZjVlJnMwMDE9eWVzJmNpZD1hdzEmZmlkPUhCbnloc2MxZXRGMU5LN1lIdnJxQzdiMTJuVC16ZkczMGFrTmJsUEZyTW1Ec1lEcC1VWlc2Z2lfUGpwRG9fY2FLVkhUNEhURjluSV9URGptLllVTWFDMVpTUTJYMFEyd2ImczAwMj0tN0FDWTZCc2ZjUGtoa2liTzdUUVh1MmxxNHJPTVZqaExneloteTBxZGtncTJFbWc3ekpSMkl3bDlnLndoVjVpcFpqRzVrUktkUDkiLCJDb25kaXRpb24iOnsiRGF0ZUxlc3NUaGFuIjp7IkFXUzpFcG9jaFRpbWUiOjE2MjI0OTY4Nzh9fX1dfQ__&Signature=aziuRZPu8aHh5e6TTAh8vdeyXPs92RYKUuyL7VGLLA~4iwMLIn1uCVPs9WokiE70tPOq~~qVdOKRFz-tNRzqN1RADlV-VhGaWmL-7idby124HQH5NAEWCL~HZDmavxkLP0i2v7q3thkzAVpawF2Q4HFokx5i2IRn~f4PbtBLKtGZx~AOy9KWPlpgexIYVNasPpkJJHwze-2HryeabBrZUCmtZk1mltkjQhW09IC2hjF8MGylIgGW0QR0blTYDNu-tuZFON~z3~QS1Juz61i6~QfTCI0YPD4RGBqCOwj2~fWQnfAz5ULioX5AXLXinxM0igKhtX~O1dNmozuWmXQcLg__&Key-Pair-Id=APKAJFHNSLHYCGFYQGIA"
+      const isMP4 = request.url().includes(".mp4");
+      const isSubtitlesFile = request.url().includes(".srt");
+      if (isMP4 || isSubtitlesFile) {
+        const url = request.url();
+        const shortenedURL =  url.substr(0, url.indexOf('?')); // Get up to before the key-values portion of the URL (up to the "?") ( https://stackoverflow.com/questions/9133102/how-to-grab-substring-before-a-specified-character-jquery-or-javascript )
+        console.log('>>', request.method(), shortenedURL + (shortenedURL.length < url.length ? " [...]" : ""));
+
+        // Get filename from the url
+        // .*\/(.*\.mp4)\??
+        var re;
+        if (isMP4) re = /.*\/(.*\.mp4)/;
+        else if (isSubtitlesFile) re = /.*\/(.*\.srt)/;
+        const matches = url.match(re);
+        if (matches != null && matches[1] != undefined) { // [0] is the match, and [1] is the first capture group ([2] is the second capture group, and so on) (demo: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Regular_Expressions/Groups_and_Ranges )
+          // Then we have a match
+          const fname = sanitize(matches[1], {replacement: '_'});
+          console.log("Found matching video or subtitles filename in URL:", fname);
+
+          // Check if this file exists, and then decide whether to skip the existing download
+          const fpath = path.join(downloadDir, fname);
+          if (fs.existsSync(fpath) && skipDownloadsIfSameName) { // TODO: this section is untested
+            var skip = false;
+            var redownloadFName = null; // If non-null, will retry waitForDownload with this new file name.
+            var newFPath = null; // Same as above, but for the whole path.
+            
+            // Check if this is in the hashmap
+            if (usedFileNames.has(fname)) {
+              // It exists on disk and we've seen it before, so inform the user and let them specify the file name.
+              // -- Misc --
+              // In the future, we could maybe make a Duplicates folder and save to folders in there titled `1`, `2,` etc. (since a future filename from a Zoom etc. video could be titled the same as our appending `_1` when an existing filename has the same name.
+              // The overall idea is that when about to save to a filename (with HTTP request intercepted and we are deciding on the filename to save to) we first check this hashmap `usedFileNames` for if the filename key exists. If it exists, save to the Duplicates folder in a subfolder that is the value in the hashmap for that key (like `1`, `2`, etc.) and even in those folders we check if the file exists and if it does then <?>. Otherwise, add it to the hashmap and save the file normally.
+              // --      --
+
+              var triedEnter = false;
+              while (true) {
+                console.log("A file with the same name as \"" + fname + "\" was downloaded or seen before in this downloading session. Type \"s\" to skip it, \"o\" to overwrite the existing file" + (!triedEnter ? ", Enter to place it in a \"Duplicates\" folder" : "") + ", or type in a new name to give it that name in the \"Duplicates\" folder: ");
+                const answer = await getLine();
+                const trimmed = answer.toLowerCase().trim();
+                if (trimmed === 's') {
+                  // Skip the file
+                  skip = true;
+                  // (Continue to the below "Skip it" section)
+                  break;
+                }
+                else if (trimmed === 'o') {
+                  // Overwrite it
+                  skip = false;
+                  // (Skip the below "Skip it" section with `skip = false`)
+                  break;
+                }
+                else if (trimmed === '') {
+                  // Place it in "Duplicates"
+                  
+                  // Create destination folder
+                  const downloadDirNew = path.join(downloadDir, 'Duplicates');
+                  if (!fs.existsSync(downloadDirNew)){
+                    fs.mkdirSync(downloadDirNew);
+                  }
+
+                  // Check if this file name is already in Duplicates
+                  newFPath = path.join(downloadDirNew, fname);
+                  if (fs.existsSync(newFPath)) {
+                    // Re-prompt
+                    console.log(`The file "${fname}" exists in the folder "${downloadDirNew}" already. Type in a new name instead.`);
+                    triedEnter = true;
+                    continue;
+                  }
+                  else {
+                    redownloadFName = newFName;
+                    break;
+                  }
+                }
+                else {
+                  // Place it in "Duplicates" using user-given name
+                  
+                  // Create destination folder
+                  const downloadDirNew = path.join(downloadDir, 'Duplicates');
+                  if (!fs.existsSync(downloadDirNew)){
+                    fs.mkdirSync(downloadDirNew);
+                  }
+
+                  // Sanitize
+                  var newFName = sanitize(trimmed, {replacement: '_'});
+
+                  // Append extension if there isn't one
+                  if (/.*\..+/.test(newFName)) { // Returns true if regex matches ( https://stackoverflow.com/questions/6603015/check-whether-a-string-matches-a-regex-in-js )
+                    // There is an extension, so continue
+                  }
+                  else {
+                    // No extension, so add it
+                    newFName = newFName + path.extname(fname);
+                  }
+
+                  // Check if this file name is already in Duplicates
+                  newFPath = path.join(downloadDirNew, newFName);
+                  if (fs.existsSync(newFPath)) {
+                    // Re-prompt
+                    console.log(`The file "${newFName}" exists in the folder "${downloadDirNew}" already. Type in a new name instead.`);
+                    continue;
+                  }
+                  else {
+                    redownloadFName = newFName;
+                    break;
+                  }
+                }
+              } // End of while(true) loop
+
+              // Re-download with new file name
+              // To do this, we download to a temp folder and then move it into the "Duplicates" folder.
+              const tempDownloadDir = path.join(downloadPath /* (<--The global variable for the root of the downloads folder) */, "Temp");
+              await setDownloadPath(tempDownloadDir, true);
+
+              // Re-download, notifying the waiting for download loop that is in `waitForDownload`
+              setDownloadDir(tempDownloadDir, async function() { // afterDownloadCompletedHandler
+                // Move the download out of `tempDownloadDir` and into the Duplicates folder
+                const tempDownloadedFilePath = path.join(tempDownloadDir, downloadedFile);
+                assert(!fs.existsSync(newFPath));
+                fs.renameSync(tempDownloadedFilePath, newFPath);
+              });
+              await request.continue();
+              //const downloadedFile = await waitForDownload(tempDownloadDir, name + ` (renamed to ${newFName})`, downloadFunc, isCancelledFunc, page_);
+              
+              // Exit
+              return Promise.resolve().then(() => request.continue()).catch(e => {console.log("Handled exception:",e.message);});
+            }
+            else {
+              skip = true;
+            }
+
+            if (skip) {
+              // Skip it
+              console.log("Download for \"" + fname + "\" already exists, skipping");
+              await request.abort("aborted"); // "aborted - An operation was aborted (due to user action)." ( https://pptr.dev/#?product=Puppeteer&version=v9.1.1&show=api-httprequestaborterrorcode )
+              // Notify the `waitForDownload` function that we skipped the download so that it cancels the waiting
+              cancelledDownload = true;
+              // And set the filename
+              reportedVideoFileNameAfterCancelledDownload = fname;
+              if (onSetReportedVideoFileNameAfterCancelledDownload != undefined) {
+                await onSetReportedVideoFileNameAfterCancelledDownload(reportedVideoFileNameAfterCancelledDownload);
+              }
+              return Promise.resolve().then(() => request.continue()).catch(e => {console.log("Handled exception:",e.message);});
+            }
+          }
+        }
+      }
+      await request.continue(); // https://pptr.dev/#?product=Puppeteer&version=v9.1.1&show=api-httprequestcontinueoverrides
+
+      // Workaround for `UnhandledPromiseRejectionWarning: Error: Request is already handled!` when doing `request.continue()` above from https://github.com/puppeteer/puppeteer/issues/3853#issuecomment-458193921
+      return Promise.resolve().then(() => request.continue()).catch(e => {console.log("Handled exception:",e.message);}); // Possible explanation of this: "Somebody correct me if I'm wrong, but I believe it's due to how all event handlers are fired synchronously. Returning a Promise forces the subsequent `request.continue()` to be fired after all event handlers have completed any synchronous work. Of course, you can't guarantee the other handlers aren't continuing/aborting the request, so you need to catch the possible "request is already handled!" error." ( https://github.com/puppeteer/puppeteer/issues/3853#issuecomment-756666325 )
+    })
+    // page_.on('response', (response) => {
+    //   console.log('<<', response.status(), response.url());
+    // })
+    
+    await page_.setRequestInterception(true); // "Activating request interception enables request.abort, request.continue and request.respond methods. This provides the capability to modify network requests that are made by a page." ( https://pptr.dev/#?product=Puppeteer&version=v9.1.1&show=api-pagesetrequestinterceptionvalue-cachesafe )
+  }
+          
   // Start the download
   await downloadFunc();
   
@@ -165,9 +344,15 @@ async function waitForDownload(downloadDir, name, downloadFunc, isCancelledFunc 
   var checkCount = 0;
   while (true) {
     // Check for cancellation
-    if (isCancelledFunc !== undefined && await isCancelledFunc() === true) {
+    if (cancelledDownload || (isCancelledFunc != undefined && await isCancelledFunc() === true)) { // Insane fact: undefined == null ( https://stackoverflow.com/questions/2559318/how-to-check-for-an-undefined-or-null-variable-in-javascript -> https://i.stack.imgur.com/rpq9d.jpg )
       console.log("Download " + (name != null ? (" of \"" + name + "\"") : "") + "was cancelled");
+      await downloadFinished();
       return null;
+    }
+    // Check for new downloadDir
+    if (newDownloadDir != null) { // TODO: untested spot
+      console.log("New download directory:", newDownloadDir);
+      downloadDir = newDownloadDir;
     }
     
     filesInDownloadDir = /*await*/ fs.readdirSync(downloadDir);
@@ -214,6 +399,12 @@ async function waitForDownload(downloadDir, name, downloadFunc, isCancelledFunc 
     });
   } while (crDownload);
 
+  // Download is finished
+  if (afterDownloadCompletedHandler != null) {
+    await afterDownloadCompletedHandler();
+  }
+  await downloadFinished();
+
   // Get the name of the downloaded file:
   // https://stackoverflow.com/questions/2963281/javascript-algorithm-to-find-elements-in-array-that-are-not-in-another-array
   // Probably slow:
@@ -230,6 +421,8 @@ async function waitForDownload(downloadDir, name, downloadFunc, isCancelledFunc 
   if (name != null) {
     assert(downloadedFileName === name); // Sanity check for when we sanitize(name) outside this function (see Precondition #2 in comment before this function's header). We want to ensure that Chrome sanitizes downloaded file names the same way that `sanitize()` does (there's probably some edge case I don't know about, either in Chrome now or in the future... could check Chromium source code I suppose, but they may change it in the future anyway). So if this assertion fails, maybe you could modify `sanitize` to be more or less aggressive.
   }
+  // Add it to the hashmap
+  usedFileNames.set(downloadedFileName, 0); // NOTE: the value (0) is currently unused.
   return downloadedFileName;
 }
 // Appends the file extension to `name` automatically based on the downloaded file's extension.
@@ -260,7 +453,7 @@ async function downloadURI_withFileMove(page, uri, name, downloadDir)
     `);
   });
   
-  // Move the file from (`downloadDir`/(`uri`'s last path component)) to (`downloadDir`/`name`):
+  // Move the file from (`downloadDir`/(`uri`'s last path component)) to (`downloadDir`/`name`.extensionHere):
   const destFile = path.join(downloadDir, name)
         + path.extname(downloadedFileName); /* <-- Appends the file extension with a dot before it */
   if (fs.existsSync(destFile)) {
@@ -282,6 +475,13 @@ async function downloadURI_withFileMove(page, uri, name, downloadDir)
 }
 // Makes Chrome download to `downloadDir`
 async function setDownloadPath(downloadDir, createBaseDirectory /* Optional parameter; if true, creates the last path component of `downloadDir` as a single folder. */) {
+  // Minor hacked-in spot //
+  if (path.normalize(path.dirname(downloadDir)) === path.normalize(downloadPath)) {
+    // Check for reserved names (see the `waitForDownload` function, which makes this Temp folder in the root of the downloads folder)
+    assert(path.basename(downloadDir) != "Temp");
+  }
+  // //
+  
   // Create destination folder if wanted
   if (createBaseDirectory === true && !fs.existsSync(downloadDir)){ // https://stackoverflow.com/questions/21194934/how-to-create-a-directory-if-it-doesnt-exist-using-node-js
     fs.mkdirSync(downloadDir);
@@ -301,9 +501,29 @@ async function setDownloadPath(downloadDir, createBaseDirectory /* Optional para
 // Precondition: `name` is a valid file name.
 async function downloadURI(page, uri, name, downloadDir, skipIfDownloadedAlready /* Optional parameter; if true, it checks if a file named `name` + URI's file extension exists in `downloadDir` already, and returns without downloading anything if so. By default, it doesn't check for this or skip if downloaded already. */) 
 {
+  // Minor hacked-in spot //
+  if (path.normalize(path.dirname(downloadDir)) === path.normalize(downloadPath)) {
+    // Check for reserved names (see the `waitForDownload` function, which makes this Temp folder in the root of the downloads folder)
+    assert(path.basename(downloadDir) != "Temp");
+  }
+  // //
+  
   // Create destination folder
   if (!fs.existsSync(downloadDir)){ // https://stackoverflow.com/questions/21194934/how-to-create-a-directory-if-it-doesnt-exist-using-node-js
     fs.mkdirSync(downloadDir);
+  }
+
+  // Check if uri exists already, and save to Temp dir if so (since Chrome will download this file as its uri but `downloadURI` will rename it afterwards)
+  if (fs.existsSync(path.join(downloadDir, sanitize(path.basename(uri), {replacement: '_'})))) { // TODO: untested spot
+    const tempDest = path.join(downloadPath, "Temp");
+    const retval = await downloadURI(page, uri, name, tempDest, skipIfDownloadedAlready);
+    
+    // Move it out
+    const finalDest = path.join(downloadDir, name) + path.extname(uri);
+    assert(!fs.existsSync(finalDest));
+    fs.renameSync(path.join(tempDest, name), finalDest);
+    
+    return retval;
   }
 
   // Check if this was downloaded already, if desired
@@ -607,8 +827,6 @@ const page = await browser.newPage();
   // })
 
   // // //
-
-  console.log("Done!");
 }
 
 var runZoom = async function(page, usedFileNames) {
@@ -689,11 +907,16 @@ var runZoom = async function(page, usedFileNames) {
           await videoOnlyPage.evaluate(fileContents); //+ `\n\ninsertButtons();`); // Insert the buttons from the zoom-download extension
         };
         // (Note: to prevent overwriting existing downloaded files, this requires the `pathToModifiedDownloadExtension` extension to be loaded.)
-        var pressCustomDownloadVideoButton = async function() {
+        var pressCustomDownloadVideoButton = async function() { // TODO: untested function
           // Click the download video button
           const downloadVideoXPath = "//div[contains(text(), 'Download Video')]";
           const button = await videoOnlyPage.waitForXPath(downloadVideoXPath);
-          await button.click();
+          const customVideoFileName = null;
+          
+          await waitForDownload(destDir, customVideoFileName, async () => { // downloadFunc
+            console.log(`Downloading custom video file`);
+            await button.click();
+          }, null /* <-- isCancelledFunc */, videoOnlyPage);
         };
         var pressCustomDownloadChatButton = async function(downloadedVideoFileName /* Optional parameter. Pass it if we downloaded the video using Zoom's own download video button, because then we can rename the subtitles file to this name without .mp4 and with .srt instead. */) {
           // Click the download chat button
@@ -739,7 +962,7 @@ var runZoom = async function(page, usedFileNames) {
 
           // FIXME: (This also applies to the `fs.existsSync` check within `downloadURI_withFileMove`) If `subtitleFileName` has invalid filename characters like slashes, then Chrome will download it as a different filename, replacing them with underscores. But we don't know if Chrome will always replace things the same way, i.e. maybe with updates it will change. So this name must somehow be gotten from Chrome outside this script, since this is used as part of the filename for subtitles, and it could contain invalid filename characters, and the nodejs script needs to know what it is.
           const subtitleFilePath = path.join(destDir, subtitleFileName);
-          // Check if it exists already
+          // Check if it exists already [not done by `waitForDownload` already (`waitForDownload` doesn't get HTTP request interception because "Request interception is not supported for data: urls." is in `node_modules/puppeteer/lib/cjs/puppeteer/common/HTTPRequest.js` line 204, and the file is set up as `subLink.href = `data:text/plain,${output}`;` in `zoom-download-modded.js`.)]
           if (skipDownloadsIfSameName === true) {
             if (fs.existsSync(subtitleFilePath)) {
               // This was downloaded already
@@ -751,64 +974,21 @@ var runZoom = async function(page, usedFileNames) {
             }
           }
           // Download it
-          console.log(`Downloading subtitle file "${subtitleFileName}"`);
-          await button.click();
+          await waitForDownload(destDir, subtitleFileName, async () => { // downloadFunc
+            console.log(`Downloading subtitle file "${subtitleFileName}"`);
+            await button.click();
+          }, null /* <-- isCancelledFunc */, videoOnlyPage);
         };
         var injected = false;
         try {
-          // First, listen to responses from HTTP requests so we can check the downloaded file's name and rename it before Chrome downloads it again, i.e. if we have it already
-          var cancelledDownload = false; // We click the button assuming that the download is desired, then cancel it if Chrome makes an HTTP request for a file that is something we already downloaded
-          var reportedVideoFileNameAfterCancelledDownload = null;
-          // https://www.checklyhq.com/learn/headless/request-interception/
-          videoOnlyPage.on('request', async (request) => {
-            //if (request.url().endsWith(".mp4")) { // <-- doesn't work because requests often look like "GET https://ssrweb.zoom.us/replay03/2021/04/29/74A106D2-400A-41DE-805C-575236956447/GMT20210429-143543_Recording_640x360.mp4?response-content-type=video%2Fmp4&response-cache-control=max-age%3D0%2Cs-maxage%3D86400&data=81fef41779cd7b07965c37d8d6c50084ce89aff0b30cdf450512e2bd90f6af5e&s001=yes&cid=aw1&fid=HBnyhsc1etF1NK7YHvrqC7b12nT-zfG30akNblPFrMmDsYDp-UZW6gi_PjpDo_caKVHT4HTF9nI_TDjm.YUMaC1ZSQ2X0Q2wb&s002=-7ACY6BsfcPkhkibO7TQXu2lq4rOMVjhLgzZ-y0qdkgq2Emg7zJR2Iwl9g.whV5ipZjG5kRKdP9&Policy=eyJTdGF0ZW1lbnQiOiBbeyJSZXNvdXJjZSI6Imh0dHBzOi8vc3Nyd2ViLnpvb20udXMvcmVwbGF5MDMvMjAyMS8wNC8yOS83NEExMDZEMi00MDBBLTQxREUtODA1Qy01NzUyMzY5NTY0NDcvR01UMjAyMTA0MjktMTQzNTQzX1JlY29yZGluZ182NDB4MzYwLm1wND9yZXNwb25zZS1jb250ZW50LXR5cGU9dmlkZW8lMkZtcDQmcmVzcG9uc2UtY2FjaGUtY29udHJvbD1tYXgtYWdlJTNEMCUyQ3MtbWF4YWdlJTNEODY0MDAmZGF0YT04MWZlZjQxNzc5Y2Q3YjA3OTY1YzM3ZDhkNmM1MDA4NGNlODlhZmYwYjMwY2RmNDUwNTEyZTJiZDkwZjZhZjVlJnMwMDE9eWVzJmNpZD1hdzEmZmlkPUhCbnloc2MxZXRGMU5LN1lIdnJxQzdiMTJuVC16ZkczMGFrTmJsUEZyTW1Ec1lEcC1VWlc2Z2lfUGpwRG9fY2FLVkhUNEhURjluSV9URGptLllVTWFDMVpTUTJYMFEyd2ImczAwMj0tN0FDWTZCc2ZjUGtoa2liTzdUUVh1MmxxNHJPTVZqaExneloteTBxZGtncTJFbWc3ekpSMkl3bDlnLndoVjVpcFpqRzVrUktkUDkiLCJDb25kaXRpb24iOnsiRGF0ZUxlc3NUaGFuIjp7IkFXUzpFcG9jaFRpbWUiOjE2MjI0OTY4Nzh9fX1dfQ__&Signature=aziuRZPu8aHh5e6TTAh8vdeyXPs92RYKUuyL7VGLLA~4iwMLIn1uCVPs9WokiE70tPOq~~qVdOKRFz-tNRzqN1RADlV-VhGaWmL-7idby124HQH5NAEWCL~HZDmavxkLP0i2v7q3thkzAVpawF2Q4HFokx5i2IRn~f4PbtBLKtGZx~AOy9KWPlpgexIYVNasPpkJJHwze-2HryeabBrZUCmtZk1mltkjQhW09IC2hjF8MGylIgGW0QR0blTYDNu-tuZFON~z3~QS1Juz61i6~QfTCI0YPD4RGBqCOwj2~fWQnfAz5ULioX5AXLXinxM0igKhtX~O1dNmozuWmXQcLg__&Key-Pair-Id=APKAJFHNSLHYCGFYQGIA"
-            const isMP4 = request.url().includes(".mp4");
-            const isSubtitlesFile = request.url().includes(".srt");
-            if (isMP4 || isSubtitlesFile) {
-              const url = request.url();
-              const shortenedURL =  url.substr(0, url.indexOf('?')); // Get up to before the key-values portion of the URL (up to the "?") ( https://stackoverflow.com/questions/9133102/how-to-grab-substring-before-a-specified-character-jquery-or-javascript )
-              console.log('>>', request.method(), shortenedURL + (shortenedURL.length < url.length ? " [...]" : ""));
-
-              // Get filename from the url
-              // .*\/(.*\.mp4)\??
-              var re;
-              if (isMP4) re = /.*\/(.*\.mp4)/;
-              else if (isSubtitlesFile) re = /.*\/(.*\.srt)/;
-              const matches = url.match(re);
-              if (matches != null && matches[1] != undefined) { // [0] is the match, and [1] is the first capture group ([2] is the second capture group, and so on) (demo: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Regular_Expressions/Groups_and_Ranges )
-                // Then we have a match
-                const fname = sanitize(matches[1], {replacement: '_'});
-                console.log("Found matching video or subtitles filename in URL:", fname);
-
-                // Check if this file exists, and then decide whether to skip the existing download
-                const fpath = path.join(destDir, fname);
-                if (fs.existsSync(fpath) && skipDownloadsIfSameName) {
-                  // Skip it
-                  console.log("Download for", fname, "already exists, skipping");
-                  await request.abort("aborted"); // "aborted - An operation was aborted (due to user action)." ( https://pptr.dev/#?product=Puppeteer&version=v9.1.1&show=api-httprequestaborterrorcode )
-                  // Notify the `waitForDownload` function that we skipped the download so that it cancels the waiting
-                  cancelledDownload = true;
-                  // And set the filename
-                  reportedVideoFileNameAfterCancelledDownload = fname;
-                  return;
-                }
-              }
-            }
-            request.continue(); // https://pptr.dev/#?product=Puppeteer&version=v9.1.1&show=api-httprequestcontinueoverrides
-          })
-          // videoOnlyPage.on('response', (response) => {
-          //   console.log('<<', response.status(), response.url());
-          // })
-          
-          await videoOnlyPage.setRequestInterception(true); // "Activating request interception enables request.abort, request.continue and request.respond methods. This provides the capability to modify network requests that are made by a page." ( https://pptr.dev/#?product=Puppeteer&version=v9.1.1&show=api-pagesetrequestinterceptionvalue-cachesafe )
-          
           // Click the download button, if we can find it (else, a TimeoutError is thrown and caught)
           const downloadButton = await videoOnlyPage.waitForSelector('.download-btn');
+          var reportedVideoFileNameAfterCancelledDownload = null;
           var downloadedVideoFileName = await waitForDownload(destDir, null /* The video has an unknown file name at this point */, async () => { // downloadFunc
             console.log("Clicking download button");
             await downloadButton.click({delay: 200});
-          }, async () => { // isCancelledFunc
-            return cancelledDownload;
+          }, null /* <-- isCancelledFunc */, videoOnlyPage, async (reportedVideoFileNameAfterCancelledDownload_) => { // onSetReportedVideoFileNameAfterCancelledDownload
+            reportedVideoFileNameAfterCancelledDownload = reportedVideoFileNameAfterCancelledDownload_;
           });
           // Check for cancelled download, and use our backup filename if so
           if (downloadedVideoFileName == null) {
@@ -862,14 +1042,14 @@ var runZoom = async function(page, usedFileNames) {
       const nextSelector = "li.ant-pagination-next";
       await frame.waitForSelector(nextSelector);
       const nextSelectorParent = "li.ant-pagination-disabled.ant-pagination-next"; // Says if the next button is disabled, meaning we're done
-      if (frame.$(nextSelectorParent) != null) {
+      if (frame.$(nextSelectorParent) == null) {
         // Then we can't go to the next page, so we're done
         noNextPage = true;
         break;
       }
       // Go to the next page
       console.log("Going to the next page...");
-      const next = await frame.$$(nextSelector);
+      const next = await frame.$(nextSelector);
       await next.click({delay: 200});
     }
     if (noNextPage) {
@@ -883,6 +1063,9 @@ var runZoom = async function(page, usedFileNames) {
 }
 // //
 
+// Global variables
+var usedFileNames = null;
+
 // Make "global" variables, for testing in the REPL:
 var browser = null;
 var page = null;
@@ -893,10 +1076,11 @@ var filesInDownloadDir = null;
 var newFilesNotInInitialArray = null;
 
 (async () => {
+  var skipREPL = false; // Assume false
   try {
     const pathToStreamRecorderExtension = require('path').join(__dirname, streamRecorderExtensionFolderName);
     //const pathToModifiedDownloadExtension = require('path').join(__dirname, modifiedDownloadExtensionFolderName); // NOTE: This modified extension doesn't seem to work -- downloads still replace existing ones (at least for the Zoom downloads) even with `conflictAction: 'uniquify'` (see bottom of `ChromeExtensions/Modified/downloads-overwrite-already-existing-files/bg.js`)
-    const pathToNoMoreDuplicatesExtension = require('path').join(__dirname, noMoreDuplicatesExtensionFolderName);
+    const pathToNoMoreDuplicatesExtension = require('path').join(__dirname, noMoreDuplicatesExtensionFolderName); // NOTE: this also doesn't work, like the above.. Chromium must be doing something weird
     const allExtensions = `${pathToStreamRecorderExtension},${pathToNoMoreDuplicatesExtension}`; //`${pathToStreamRecorderExtension},${pathToModifiedDownloadExtension}`;
     /*const*/ browser = await puppeteer.launch({
       headless: false,
@@ -939,7 +1123,7 @@ var newFilesNotInInitialArray = null;
       await getLine();
       console.log("Running...");
       
-      var usedFileNames = new Map(); // File names that were used in the current download destination folder (which can change, in which case this variable resets to an empty Map). Before downloading or checking if a file name exists, we check if the file name is in this hashmap. If so, we warn in the console and download it with _1 or _2 and so on (value from the hashmap) appended before the .mp4 or .srt extension, and increment the number value in the hashmap. If the file name didn't exist in the hashmap, add it with a new value of 0. ( https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Map )
+      /*var*/ usedFileNames = new Map(); // File names that were used in the current download destination folder (which can change, in which case this variable resets to an empty Map). Before downloading or checking if a file name exists, we check if the file name is in this hashmap. If so, we warn in the console and download it with _1 or _2 and so on (value from the hashmap) appended before the .mp4 or .srt extension, and increment the number value in the hashmap. If the file name didn't exist in the hashmap, add it with a new value of 0. ( https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Map )
       // Go through each URL given
       //await page.waitForNavigation(); // Wait for previous thing to load
       await asyncForEach(pages, async function(specifier) {
@@ -968,11 +1152,15 @@ var newFilesNotInInitialArray = null;
       page = await browser.newPage();
       const fname = 'Media Gallery - EECE 2112-01 Circuits I (2021S).html';
       await page.goto("file://" + require('path').join(__dirname, fname)); // __dirname is the current/working directory
-      await runKaltura(page);
+      await runKaltura(page, new Map());
     }
 
 
     //console.log(UNITS);
+    
+    console.log("Done!");
+    skipREPL = true;
+    
   /*} catch (error) {
     // Rethrow the error:
     // https://www.bennadel.com/blog/2831-rethrowing-errors-in-javascript-and-node-js.htm
@@ -983,6 +1171,8 @@ var newFilesNotInInitialArray = null;
     throw( error );
   }*/
   } finally {
+    if (skipREPL) return;
+    
     // Open a REPL ( https://nodejs.org/api/repl.html )
     //while (true) {
     //eval(
