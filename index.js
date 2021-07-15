@@ -2,13 +2,23 @@
 
 // All pages to download
 var pages = [
-  {
+  { // Circuits
     url: "https://brightspace.vanderbilt.edu/d2l/common/dialogs/quickLink/quickLink.d2l?ou=269291&type=lti&rcode=vanderbiltprod-14704&srcou=6606&launchFramed=1&framedName=Media+Gallery",
     type: "kaltura",
     skip: true
   },
-  {
+  { // DiffEq
     url: "https://brightspace.vanderbilt.edu/d2l/common/dialogs/quickLink/quickLink.d2l?ou=269937&type=lti&rcode=vanderbiltprod-849227&srcou=6606&launchFramed=1&framedName=Zoom",
+    type: "zoom",
+    skip: true
+  },
+  { // Physics
+    url: "https://brightspace.vanderbilt.edu/d2l/common/dialogs/quickLink/quickLink.d2l?ou=271783&type=lti&rcode=vanderbiltprod-849227&srcou=6606&launchFramed=1&framedName=Zoom",
+    type: "zoom",
+    skip: true
+  },
+  { // Logic
+    url: "https://brightspace.vanderbilt.edu/d2l/common/dialogs/quickLink/quickLink.d2l?ou=270193&type=lti&rcode=vanderbiltprod-849227&srcou=6606&launchFramed=1&framedName=Zoom",
     type: "zoom",
     skip: false
   }
@@ -29,6 +39,7 @@ skipDownloadsIfSameName = true;
 
 // Whether to use a local HTML file for testing instead of `pages` declared above
 const testMode = false; //true;
+const skipToThisZoomPage = 0; //1; // 0;   // If non-zero, skip to this zero-based index instead of starting from the first page of any Zoom webpages being downloaded.
 
 // //
 
@@ -560,6 +571,40 @@ async function downloadURI(page, uri, name, downloadDir, skipIfDownloadedAlready
 //   }
 //   return filename;
 // };
+
+var enterREPL = function(extEnv /* (Object) Any extra variables to expose to the REPL */) {
+  // Open a REPL ( https://nodejs.org/api/repl.html )
+  //while (true) {
+  //eval(
+  
+  const repl = require('repl');
+  
+  // start repl on stdin
+  console.log("Starting REPL. Use .exit to exit, or .help to see more commands.");
+  var ctx = repl.start({
+    prompt: "prompt> ",
+    useGlobal: true, // [Doesn't seem to work] Allow access to global variables outside the REPL's context.
+    //breakEvalOnSigint: true
+  }).context;
+  ctx.browser = browser; // https://nodejs.org/api/repl.html#repl_global_and_local_scope : {"
+  // The default evaluator provides access to any variables that exist in the global scope. It is possible to expose a variable to the REPL explicitly by assigning it to the context object associated with each REPLServer:
+  // const repl = require('repl');
+  // const msg = 'message';
+  // 
+  // repl.start('> ').context.m = msg;
+  // "}
+  // Add some globals:
+  ctx.page = page; // Current browser page
+  ctx.page2 = page2;
+  ctx.videoOnlyPage = videoOnlyPage;
+  ctx.filesInitiallyInDownloadDir = filesInitiallyInDownloadDir;
+  ctx.filesInDownloadDir = filesInDownloadDir;
+  ctx.newFilesNotInInitialArray = newFilesNotInInitialArray;
+  
+  Object.assign(ctx, extEnv); // Copy remaining context variables into REPL context  // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Object/assign : `Object.assign(target, source)`: "The Object.assign() method copies all enumerable own properties from one or more source objects to a target object. It returns the modified target object."
+  
+  //}
+};
 // //
 
 // Lib //
@@ -830,7 +875,7 @@ const page = await browser.newPage();
 }
 
 var runZoom = async function(page, usedFileNames) {
-  const frame = await getD2LIFrame(page);
+  let frame = await getD2LIFrame(page);
 
   var clickPreviousMeetings = async function() {
     // Click on the "Previous Meetings" button:
@@ -862,21 +907,111 @@ var runZoom = async function(page, usedFileNames) {
   var i;
   var result;
   var pageIndex = 0;
+  var goToNextPage = async function(page, d2lFrame, currentPageIndex, shouldStartFromPageZeroUpToCurrentIndex) {
+    // Returns the next page index and whether or not we're finished because there's no next page.
+
+    const frame = d2lFrame;
+
+    // Go to the next page again as many times as for the current index
+    var j;
+    var noNextPage = false; // Assume false
+    for (j = shouldStartFromPageZeroUpToCurrentIndex ? 0 : currentPageIndex - 1; j < currentPageIndex; j++) {
+      const nextSelector = "li.ant-pagination-next";
+      await frame.waitForSelector(nextSelector);
+      const nextSelectorParent = "li.ant-pagination-disabled.ant-pagination-next"; // Says if the next button is disabled, meaning we're done
+      if (frame.$(nextSelectorParent) == null) {
+        // Then we can't go to the next page, so we're done
+        noNextPage = true;
+        return {nextPageIndex: currentPageIndex + 1, noNextPage: noNextPage};
+      }
+      // Go to the next page
+      console.log("Going to the next page...");
+      const next = await frame.$(nextSelector);
+      await next.click({delay: 200});
+    }
+    return {nextPageIndex: currentPageIndex + 1, noNextPage: noNextPage};
+  };
+  // Testing //
+  var skippedPagesForTesting = false;
+  // //
   while (true) {
+    // Testing //
+    // Skip some pages for testing
+    if (skipToThisZoomPage != 0 && !skippedPagesForTesting) {
+      console.log(`Skipping to page ${skipToThisZoomPage + 1} for testing`);
+      var k;
+      let nextPageInfo = null; // `let` is like `var`, but is block-scoped instead of function-scoped, Yikes, JavaScript... since I used nextPageInfo as const (block-scope) before, I can't make this be a var here, else you get `SyntaxError: Identifier 'nextPageInfo' has already been declared` at load-time. ( https://www.freecodecamp.org/news/var-let-and-const-whats-the-difference/ )
+      for (k = 0; k < skipToThisZoomPage; k++) {
+        nextPageInfo = await goToNextPage(page, frame, pageIndex, false);
+        if (nextPageInfo.noNextPage) {
+          break; // We're done
+        }
+        pageIndex = nextPageInfo.nextPageIndex;
+      }
+      if (k < skipToThisZoomPage) { // If the loop didn't complete
+        assert(!nextPageInfo.noNextPage);
+        break; // We're done completely with this Zoom webpage, since it must have not had a next page
+      }
+
+      skippedPagesForTesting = true;
+    }
+    // //
+    
     //await asyncForEach(result, async function(elementHandle) {
     for (i = 0; i < result.length; i++) {
       var elementHandle = result[i];
       console.log(`-- Downloading video ${i + 1} of the ${result.length} on this page --`);
 
-      // Click on "Recording Details" (middle-clicking to open in a new tab results in a page displaying "The recording does not exist(2237)." ( https://applications.zoom.us/lti/rich/home/recording/detail ))
-      await elementHandle.click({delay: 200});
+      var tryCount = 0;
+      let sel;
+      while (true) {
+        console.log(`Whether this recording details button is in view: ${await elementHandle.isIntersectingViewport()}`);
+        // Click on "Recording Details" (middle-clicking to open in a new tab results in a page displaying "The recording does not exist(2237)." ( https://applications.zoom.us/lti/rich/home/recording/detail ))
+        await elementHandle.click({delay: 200});
+        //enterREPL({result: result, elementHandle: elementHandle});
 
-      // Grab each video (there can be multiple), ignoring audio files
-      // The div:nth-child here can be changed to cycle through each video or audio element if needed:
-      // #integration-recording-detail > div > div > div > div.meeting > div > div.recording > div:nth-child(1) > div > div > div[style*=video] > span
-      // #integration-recording-detail > div > div > div > div.meeting > div > div.recording > div:nth-child(2) > div > div > div[style*=audio] > span      // `div[style*=audio]` means the div has an attribute "style" that contains the substring "audio"
-      const sel = '#integration-recording-detail > div > div > div > div.meeting > div > div.recording > div > div > div > div[style*=video] > span';
-      await frame.waitForSelector(sel);
+        // Grab each video (there can be multiple), ignoring audio files
+        // The div:nth-child here can be changed to cycle through each video or audio element if needed:
+        // #integration-recording-detail > div > div > div > div.meeting > div > div.recording > div:nth-child(1) > div > div > div[style*=video] > span
+        // #integration-recording-detail > div > div > div > div.meeting > div > div.recording > div:nth-child(2) > div > div > div[style*=audio] > span      // `div[style*=audio]` means the div has an attribute "style" that contains the substring "audio"
+        sel = '#integration-recording-detail > div > div > div > div.meeting > div > div.recording > div > div > div > div[style*=video] > span';
+        try {
+          const options = tryCount > 2 ? undefined : {timeout: 3000};
+          let shouldRetry = false; // Assume false
+          await frame.waitForSelector(sel, options).catch((error) => {
+            // Check if this is an error saying the frame got detached, and if so, retry with the frame re-grabbed.
+            console.log(err.message);
+            enterREPL(); // Still testing
+            if (err.message === "waitForFunction failed: frame got detached.") {
+              // Retry
+              shouldRetry = true;
+              console.log("Handled detached frame");
+            }
+            else {
+              // Rethrow
+              throw error;
+            }
+            
+            //console.error(error);
+          });
+          if (shouldRetry) {
+            // Re-grab frame and try again
+            frame = await getD2LIFrame(page);
+            continue;
+          }
+        } catch (e) {
+          if (e instanceof puppeteer.errors.TimeoutError && pageIndex > 0 && tryCount < 3) { // Retry the clicking since this happens sometimes on the second page (and possibly onwards) for some reason
+            // specific error
+            
+            tryCount++;
+            continue;
+          } else {
+            throw e; // let others bubble up
+          }
+        }
+
+        break;
+      }
       const allVideos = await frame.$$(sel); // Tip: to test CSS selectors in Chrome, use Command/Ctrl F and then paste this in (source: https://developers.google.com/web/updates/2015/05/search-dom-tree-by-css-selector ). It goes into iframes too.
       console.log("Number of sub-videos:", allVideos.length);
 
@@ -1033,29 +1168,13 @@ var runZoom = async function(page, usedFileNames) {
       
       // //
     }
-    
-    // Go to the next page again as many times as for the current index
-    pageIndex++;
-    var j;
-    var noNextPage = false; // Assume false
-    for (j = 0; j < pageIndex; j++) {
-      const nextSelector = "li.ant-pagination-next";
-      await frame.waitForSelector(nextSelector);
-      const nextSelectorParent = "li.ant-pagination-disabled.ant-pagination-next"; // Says if the next button is disabled, meaning we're done
-      if (frame.$(nextSelectorParent) == null) {
-        // Then we can't go to the next page, so we're done
-        noNextPage = true;
-        break;
-      }
-      // Go to the next page
-      console.log("Going to the next page...");
-      const next = await frame.$(nextSelector);
-      await next.click({delay: 200});
-    }
-    if (noNextPage) {
+
+    const nextPageInfo = await goToNextPage(page, frame, pageIndex, true);
+    if (nextPageInfo.noNextPage) {
       break; // We're done
     }
-    i = 0; // Reset index
+    pageIndex = nextPageInfo.nextPageIndex;
+    i = 0; // Reset index into `result` array
     
     // Recompute video list
     result = await computeVideoList();
@@ -1174,27 +1293,6 @@ var newFilesNotInInitialArray = null;
     if (skipREPL) return;
     
     // Open a REPL ( https://nodejs.org/api/repl.html )
-    //while (true) {
-    //eval(
-      
-    const repl = require('repl');
-      
-    // start repl on stdin
-    var ctx = repl.start("prompt> ").context;
-    ctx.browser = browser; // https://nodejs.org/api/repl.html#repl_global_and_local_scope : {"
-    // The default evaluator provides access to any variables that exist in the global scope. It is possible to expose a variable to the REPL explicitly by assigning it to the context object associated with each REPLServer:
-    // const repl = require('repl');
-    // const msg = 'message';
-    // 
-    // repl.start('> ').context.m = msg;
-    // "}
-    ctx.page = page; // Current browser page
-    ctx.page2 = page2;
-    ctx.videoOnlyPage = videoOnlyPage;
-    ctx.filesInitiallyInDownloadDir = filesInitiallyInDownloadDir;
-    ctx.filesInDownloadDir = filesInDownloadDir;
-    ctx.newFilesNotInInitialArray = newFilesNotInInitialArray;
-    
-    //}
+    enterREPL();
   }
 })();

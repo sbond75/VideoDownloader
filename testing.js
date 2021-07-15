@@ -260,3 +260,50 @@ console.log(subLink);
 // the subtitles have the same name because they have the same generated name from zoom-download-modded.js !
 // zoom download video button doesn't work normally if you press it in another video so that isnt from my script!
 // Filenames should be different each time from Zoom, assuming zoom doesn't change things suddenly. To prevent any possible issues, we could use a Set of strings that are video filenames that were previously downloaded, and serialize this to a sqlite database or something like that, and reload it...
+
+
+
+
+var result = null;
+/* This promise seems to never resolve: browser.pages() */ Promise.resolve().then(async (pages) => {
+    var getD2LIFrame = async function(page) {
+	// Wait for the results page to load and display the results.
+	const sel = "iframe.d2l-iframe";
+	const frameHandle = await page.waitForSelector(sel); //await page.$(sel); //page.$("iframe[id='frame1']"); // https://chercher.tech/puppeteer/iframes-puppeteer
+	assert(frameHandle != null);
+	const frame = await frameHandle.contentFrame();
+	assert(frame != null);
+	
+	return frame;
+    }
+    var computeVideoList = async function() {
+	const frame = await getD2LIFrame(page);
+	
+	const resultsXPath = "//a[contains(text(), 'Recording Details')]"; // const resultsSelector = "a[innertext='Recording Details']";
+	await frame.waitForXPath(resultsXPath);
+	//await page.waitForSelector(resultsSelector);
+	const res = await frame.$x(resultsXPath);
+	console.log(res.length);
+	
+	return res;
+    };
+    result = await computeVideoList();
+    console.log(result.length);
+    await result[0].click();
+});
+
+browser.pages().then(async (pages) => {
+    console.log(pages);
+});
+
+Promise.resolve().then(async (pages) => {
+    console.log(pages);
+});
+
+page2.title().then(async (value) => {
+    console.log(value)
+});
+
+Promise.resolve().then(async () => {
+    await elementHandle.click({delay: 200});
+});

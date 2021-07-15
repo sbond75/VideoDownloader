@@ -1,10 +1,12 @@
 Zoom
-- Chat
-- Time
-- All videos (multiple in each "Recording Details")
-- Subtitles?
+- [done] Chat
+- [done] Time
+- [done] All videos (multiple in each "Recording Details")
+- [done] Subtitles?
 
-Need to re-test kaltura since I changed `downloadURI`-related stuff
+Testing
+- Need to re-test kaltura since I changed `downloadURI`-related stuff
+- Need to see if downloading second pages (and onwards) of Zoom videos works
 
 Kaltura
 - [done] Title
