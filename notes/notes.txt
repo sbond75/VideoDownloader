@@ -5,7 +5,8 @@ Zoom
 - [done] Subtitles?
 
 Testing
-- Need to re-test kaltura since I changed `downloadURI`-related stuff
+- [done] Need to re-test kaltura since I changed `downloadURI`-related stuff
+- Possibly need to re-test Zoom downloader
 - Need to see if downloading second pages (and onwards) of Zoom videos works
 
 Kaltura

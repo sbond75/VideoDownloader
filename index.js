@@ -5,17 +5,17 @@ var pages = [
   { // Circuits
     url: "https://brightspace.vanderbilt.edu/d2l/common/dialogs/quickLink/quickLink.d2l?ou=269291&type=lti&rcode=vanderbiltprod-14704&srcou=6606&launchFramed=1&framedName=Media+Gallery",
     type: "kaltura",
-    skip: true
+    skip: false
   },
   { // DiffEq
     url: "https://brightspace.vanderbilt.edu/d2l/common/dialogs/quickLink/quickLink.d2l?ou=269937&type=lti&rcode=vanderbiltprod-849227&srcou=6606&launchFramed=1&framedName=Zoom",
     type: "zoom",
-    skip: true
+    skip: false
   },
   { // Physics
     url: "https://brightspace.vanderbilt.edu/d2l/common/dialogs/quickLink/quickLink.d2l?ou=271783&type=lti&rcode=vanderbiltprod-849227&srcou=6606&launchFramed=1&framedName=Zoom",
     type: "zoom",
-    skip: true
+    skip: false
   },
   { // Logic
     url: "https://brightspace.vanderbilt.edu/d2l/common/dialogs/quickLink/quickLink.d2l?ou=270193&type=lti&rcode=vanderbiltprod-849227&srcou=6606&launchFramed=1&framedName=Zoom",
@@ -166,7 +166,7 @@ async function downloadURL_chromeWithoutWebSecurity(page, uri, name, downloadDir
 // - 1. The downloaded file that is downloaded via `downloadFunc` does not end in `.crdownload`.
 // - 2. `name` is a valid file name.
 // NOTE: If this function ends up downloading a file with a name that already exists, Chromium replaces the existing file for some reason. This causes this function to hang forever, because it will be waiting for a *new* file to be created. In a way, this is good because there should never be any overwriting.
-async function waitForDownload(downloadDir, name, downloadFunc, isCancelledFunc /* Optional async function, see explanation on the second line above */, page_ /* Optional. If provided, the `waitForDownload` function will abort/cancel if HTTP requests made by this `page_` refer to files that already exist in `downloadDir`. */, onSetReportedVideoFileNameAfterCancelledDownload /* Optional async function that receives (as a single argument) the video file name that was reported by the HTTP request but when this request was cancelled. */) {
+async function waitForDownload(downloadDir, name, downloadFunc, isCancelledFunc /* Optional async function, see explanation on the second line above */, page_ /* Optional. If provided, the `waitForDownload` function will abort/cancel if HTTP requests made by this `page_` refer to files that already exist in `downloadDir`. */, onSetReportedVideoFileNameAfterCancelledDownload /* Optional async function that receives (as a single argument) the video file name that was reported by the HTTP request but when this request was cancelled. */, skipNameAssertion /* Optional boolean: if true, will not assert that the downloaded file name equals the `name` parameter. */) {
   /*let*/ filesInitiallyInDownloadDir = /*await*/ fs.readdirSync(downloadDir);
 
   var downloadFinished = async function() {
@@ -185,7 +185,7 @@ async function waitForDownload(downloadDir, name, downloadFunc, isCancelledFunc 
 
   var cancelledDownload = false; // We click the button assuming that the download is desired, then cancel it if Chrome makes an HTTP request for a file that is something we already downloaded
   var reportedVideoFileNameAfterCancelledDownload = null;
-  if (page_ !== undefined) {
+  if (page_) {
     // First, listen to responses from HTTP requests so we can check the downloaded file's name and rename it before Chrome downloads it again, i.e. if we have it already
     // https://www.checklyhq.com/learn/headless/request-interception/
     page_.on('request', async (request) => {
@@ -429,7 +429,7 @@ async function waitForDownload(downloadDir, name, downloadFunc, isCancelledFunc 
   // path.basename(uri) may or may not be equal to newFilesNotInInitialArray[0], so we use the actual filename (newFilesNotInInitialArray[0]):
   let downloadedFileName = newFilesNotInInitialArray[0];
   console.log({"downloadedFileName": downloadedFileName, "name": name});
-  if (name != null) {
+  if (name != null && !skipNameAssertion) {
     assert(downloadedFileName === name); // Sanity check for when we sanitize(name) outside this function (see Precondition #2 in comment before this function's header). We want to ensure that Chrome sanitizes downloaded file names the same way that `sanitize()` does (there's probably some edge case I don't know about, either in Chrome now or in the future... could check Chromium source code I suppose, but they may change it in the future anyway). So if this assertion fails, maybe you could modify `sanitize` to be more or less aggressive.
   }
   // Add it to the hashmap
@@ -462,7 +462,7 @@ async function downloadURI_withFileMove(page, uri, name, downloadDir)
       link.click();
       link.remove();
     `);
-  });
+  }, null, null, null, true /* We will rename the file afterwards since it won't match the `name` we provide -- instead, it will be something like `a.mp4`. */);
   
   // Move the file from (`downloadDir`/(`uri`'s last path component)) to (`downloadDir`/`name`.extensionHere):
   const destFile = path.join(downloadDir, name)
@@ -485,9 +485,9 @@ async function downloadURI_withFileMove(page, uri, name, downloadDir)
   fs.renameSync(path.join(downloadDir, downloadedFileName), destFile);
 }
 // Makes Chrome download to `downloadDir`
-async function setDownloadPath(downloadDir, createBaseDirectory /* Optional parameter; if true, creates the last path component of `downloadDir` as a single folder. */) {
+async function setDownloadPath(downloadDir, createBaseDirectory /* Optional parameter; if true, creates the last path component of `downloadDir` as a single folder. */, allowTempDownloadDir /* Optional parameter; if true, providing a `downloadDir` parameter that ends in "Temp" and is in the default `downloadPath` will not be checked in an assertion. */) {
   // Minor hacked-in spot //
-  if (path.normalize(path.dirname(downloadDir)) === path.normalize(downloadPath)) {
+  if (!allowTempDownloadDir && path.normalize(path.dirname(downloadDir)) === path.normalize(downloadPath)) {
     // Check for reserved names (see the `waitForDownload` function, which makes this Temp folder in the root of the downloads folder)
     assert(path.basename(downloadDir) != "Temp");
   }
@@ -510,11 +510,11 @@ async function setDownloadPath(downloadDir, createBaseDirectory /* Optional para
 }
 // Appends the file extension to `name` automatically.
 // Precondition: `name` is a valid file name.
-async function downloadURI(page, uri, name, downloadDir, skipIfDownloadedAlready /* Optional parameter; if true, it checks if a file named `name` + URI's file extension exists in `downloadDir` already, and returns without downloading anything if so. By default, it doesn't check for this or skip if downloaded already. */) 
+async function downloadURI(page, uri, name, downloadDir, skipIfDownloadedAlready /* Optional parameter; if true, it checks if a file named `name` + URI's file extension exists in `downloadDir` already, and returns without downloading anything if so. By default, it doesn't check for this or skip if downloaded already. */, allowTempDownloadDir /* Optional parameter; if true, providing a `downloadDir` parameter that ends in "Temp" and is in the default `downloadPath` will not be checked in an assertion. */) 
 {
   // Minor hacked-in spot //
-  if (path.normalize(path.dirname(downloadDir)) === path.normalize(downloadPath)) {
-    // Check for reserved names (see the `waitForDownload` function, which makes this Temp folder in the root of the downloads folder)
+  if (!allowTempDownloadDir && path.normalize(path.dirname(downloadDir)) === path.normalize(downloadPath)) {
+    // Check for reserved names (see the `waitForDownload` function, which makes this Temp folder in the root of the downloads folder). This check is performed in the (rare) case that, for example, a webpage title is "Temp", a course's videos would otherwise download to our reserved "Temp" folder and therefore possibly get overwritten by more videos later.
     assert(path.basename(downloadDir) != "Temp");
   }
   // //
@@ -525,14 +525,14 @@ async function downloadURI(page, uri, name, downloadDir, skipIfDownloadedAlready
   }
 
   // Check if uri exists already, and save to Temp dir if so (since Chrome will download this file as its uri but `downloadURI` will rename it afterwards)
-  if (fs.existsSync(path.join(downloadDir, sanitize(path.basename(uri), {replacement: '_'})))) { // TODO: untested spot
+  if (fs.existsSync(path.join(downloadDir, sanitize(path.basename(uri), {replacement: '_'})))) { // [tested spot]
     const tempDest = path.join(downloadPath, "Temp");
-    const retval = await downloadURI(page, uri, name, tempDest, skipIfDownloadedAlready);
+    const retval = await downloadURI(page, uri, name, tempDest, skipIfDownloadedAlready, true /* This allows downloads to "Temp" within the `downloadPath` folder. */);
     
     // Move it out
     const finalDest = path.join(downloadDir, name) + path.extname(uri);
     assert(!fs.existsSync(finalDest));
-    fs.renameSync(path.join(tempDest, name), finalDest);
+    fs.renameSync(path.join(tempDest, name) + path.extname(uri), finalDest);
     
     return retval;
   }
@@ -551,7 +551,7 @@ async function downloadURI(page, uri, name, downloadDir, skipIfDownloadedAlready
   }
 
   // Make Chrome download to `downloadDir`
-  await setDownloadPath(downloadDir, false);
+  await setDownloadPath(downloadDir, false, allowTempDownloadDir);
 
   // Download the file
   return await downloadURI_withFileMove(page, uri, name, downloadDir);
@@ -981,7 +981,7 @@ var runZoom = async function(page, usedFileNames) {
           await frame.waitForSelector(sel, options).catch((error) => {
             // Check if this is an error saying the frame got detached, and if so, retry with the frame re-grabbed.
             console.log(err.message);
-            enterREPL(); // Still testing
+            enterREPL(); // Still testing -- this line is a placeholder.  // TODO: this section is untested
             if (err.message === "waitForFunction failed: frame got detached.") {
               // Retry
               shouldRetry = true;
